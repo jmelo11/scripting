@@ -1,17 +1,21 @@
 use super::node::Node;
 
 pub trait NodeVisitor {
-    fn visit(&self, node: Box<Node>);
+    type Output;
+    fn visit(&self, node: &Box<Node>) -> Self::Output;
 }
 
 pub trait NodeConstVisitor {
-    fn const_visit(&self, node: Box<Node>);
+    type Output;
+    fn const_visit(&self, node: Box<Node>) -> Self::Output;
 }
 
 pub trait Visitable {
-    fn accept(&mut self, visitor: &dyn NodeVisitor);
+    type Output;
+    fn accept(&mut self, visitor: &impl NodeVisitor) -> Self::Output;
 }
 
 pub trait ConstVisitable {
-    fn const_accept(&self, visitor: &dyn NodeConstVisitor);
+    type Output;
+    fn const_accept(&self, visitor: &impl NodeConstVisitor) -> Self::Output;
 }

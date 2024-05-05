@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use super::traits::{ConstVisitable, NodeConstVisitor, NodeVisitor, Visitable};
 
 pub type ExpressionTree = Box<Node>;
@@ -7,7 +9,7 @@ pub enum Node {
     Base(Vec<ExpressionTree>),
 
     // variables
-    Variable(Vec<ExpressionTree>, String, Option<usize>),
+    Variable(Vec<ExpressionTree>, String, OnceLock<usize>),
     Constant(f64),
 
     // math
@@ -65,11 +67,11 @@ impl Node {
     }
 
     pub fn new_variable(name: String) -> Node {
-        Node::Variable(Vec::new(), name, None)
+        Node::Variable(Vec::new(), name, OnceLock::new())
     }
 
     pub fn new_variable_with_id(name: String, id: usize) -> Node {
-        Node::Variable(Vec::new(), name, Some(id))
+        Node::Variable(Vec::new(), name, id.into())
     }
 
     pub fn new_min() -> Node {
@@ -222,13 +224,15 @@ impl Node {
 }
 
 impl Visitable for Box<Node> {
-    fn accept(&mut self, visitor: &dyn NodeVisitor) {
-        visitor.visit(self.clone());
+    type Output = ();
+    fn accept(&mut self, visitor: &impl NodeVisitor) {
+        visitor.visit(self);
     }
 }
 
 impl ConstVisitable for Box<Node> {
-    fn const_accept(&self, visitor: &dyn NodeConstVisitor) {
+    type Output = ();
+    fn const_accept(&self, visitor: &impl NodeConstVisitor) {
         visitor.const_visit(self.clone());
     }
 }

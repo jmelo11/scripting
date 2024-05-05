@@ -9,7 +9,9 @@ pub enum ScriptingError {
     #[error("Error while parsing: {0}")]
     ParsingError(#[from] std::num::ParseFloatError),
     #[error("Unexpected token")]
-    UnexpectedToken,
+    UnexpectedToken(String),
+    #[error("Error while evaluating: {0}")]
+    EvaluationError(String),
 }
 
 pub type Result<T> = std::result::Result<T, ScriptingError>;

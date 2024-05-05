@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::sync::OnceLock;
 
 use super::lexer::Token;
 use crate::nodes::node::{ExpressionTree, Node};
@@ -7,6 +8,8 @@ use crate::utils::errors::{Result, ScriptingError};
 pub struct Parser {
     tokens: RefCell<Vec<Token>>,
     position: RefCell<usize>,
+    line: RefCell<usize>,
+    column: RefCell<usize>,
 }
 
 impl Parser {
@@ -14,6 +17,8 @@ impl Parser {
         Self {
             tokens: RefCell::new(tokens),
             position: RefCell::new(0),
+            line: RefCell::new(1),
+            column: RefCell::new(1),
         }
     }
 
@@ -33,8 +38,54 @@ impl Parser {
             .unwrap_or(Token::EOF)
     }
 
-    pub fn advance(&self) {
-        *self.position.borrow_mut() += 1;
+    fn advance(&self) {
+        let mut pos = self.position.borrow_mut();
+        let mut line = self.line.borrow_mut();
+        let mut column = self.column.borrow_mut();
+        let tokens = self.tokens.borrow();
+
+        loop {
+            let current_token = tokens.get(*pos + 1).cloned().unwrap_or(Token::EOF);
+            match current_token {
+                Token::Newline => {
+                    *line += 1;
+                    *column = 1;
+                    *pos += 1;
+                }
+                _ => {
+                    *column += {
+                        let token_str = format!("{:?}", current_token);
+                        token_str.len()
+                    };
+                    *pos += 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Generate an error message containing the current line and column
+    pub fn error_message(&self, msg: &str) -> ScriptingError {
+        let line = *self.line.borrow();
+        let column = *self.column.borrow();
+        ScriptingError::InvalidSyntax(format!(
+            "Error at line {}, column {}: {}",
+            line, column, msg
+        ))
+    }
+
+    /// Verifies that the current token matches the expected token and advances the parser.
+    /// Returns an error if the token does not match.
+    pub fn expect_token(&self, expected: Token) -> Result<()> {
+        if self.current_token() == expected {
+            Ok(())
+        } else {
+            Err(self.error_message(&format!(
+                "Expected token {:?}, found {:?}",
+                expected,
+                self.current_token()
+            )))
+        }
     }
 }
 
@@ -42,6 +93,10 @@ impl Parser {
     pub fn parse(&self) -> Result<ExpressionTree> {
         let mut expressions = Vec::new();
         while self.current_token() != Token::EOF {
+            if self.current_token() == Token::Newline {
+                self.advance();
+                continue;
+            }
             let expr = self.parse_expression()?;
             expressions.push(expr);
         }
@@ -50,87 +105,70 @@ impl Parser {
 
     pub fn parse_expression(&self) -> Result<ExpressionTree> {
         match self.current_token() {
-            Token::If => return self.parse_if(),
-            Token::EOF => Err(ScriptingError::InvalidSyntax(
-                "Unexpected end of expression".to_string(),
-            )),
+            Token::If => self.parse_if(),
+            Token::EOF => Err(self.error_message("Unexpected end of expression")),
             _ => {
+                //let lhs = self.parse_variable()?;
                 let lhs = self.parse_variable()?;
                 match self.current_token() {
                     Token::Assign => self.parse_assign(lhs),
-                    Token::EOF => Err(ScriptingError::InvalidSyntax(
-                        "Unexpected end of expression".to_string(),
-                    )),
-                    _ => Err(ScriptingError::UnexpectedToken),
+                    Token::EOF => Err(self.error_message("Unexpected end of expression")),
+                    Token::Newline => Err(self.error_message("Unexpected newline")),
+                    _ => Err(ScriptingError::UnexpectedToken(format!(
+                        "{:?}",
+                        self.current_token()
+                    ))),
                 }
             }
         }
     }
 
     pub fn parse_if(&self) -> Result<ExpressionTree> {
-        match self.current_token() {
-            Token::If => {
-                self.advance();
+        self.expect_token(Token::If)?;
+        self.advance();
+        let mut conditions = self.parse_conditions()?;
 
-                match self.current_token() {
-                    Token::EOF => Err(ScriptingError::InvalidSyntax(
-                        "Unexpected end of if statement".to_string(),
-                    )),
-                    _ => {
-                        let mut conditions = self.parse_conditions()?;
-                        match self.current_token() {
-                            Token::Then => {
-                                self.advance();
-                                let mut expressions = Vec::new();
-                                while self.current_token() != Token::EOF
-                                    && self.current_token() != Token::Else
-                                    && self.current_token() != Token::End
-                                {
-                                    let expr = self.parse_expression()?;
-                                    expressions.push(expr);
-                                }
+        self.expect_token(Token::Then)?;
+        self.advance();
 
-                                let mut else_index = None;
-                                match self.current_token() {
-                                    Token::Else => {
-                                        self.advance();
-                                        else_index = Some(expressions.len());
-                                        let mut else_statements = Vec::new();
-                                        while self.current_token() != Token::EOF
-                                            && self.current_token() != Token::End
-                                        {
-                                            let statement = self.parse_expression()?;
-                                            else_statements.push(statement);
-                                        }
+        let mut expressions = Vec::new();
+        while self.current_token() != Token::EOF
+            && self.current_token() != Token::Else
+            && self.current_token() != Token::End
+        {
+            let expr = self.parse_expression()?;
+            expressions.push(expr);
+        }
 
-                                        match self.current_token() {
-                                            Token::End => {
-                                                self.advance();
-                                                conditions.extend(expressions);
-                                                conditions.extend(else_statements);
-                                                Ok(Box::new(Node::If(conditions, else_index)))
-                                            }
-                                            _ => Err(ScriptingError::InvalidSyntax(
-                                                "Expected end of if statement".to_string(),
-                                            )),
-                                        }
-                                    }
-                                    Token::End => {
-                                        self.advance();
-                                        conditions.extend(expressions);
-                                        Ok(Box::new(Node::If(conditions, else_index)))
-                                    }
-                                    _ => Err(ScriptingError::InvalidSyntax(
-                                        "Expected else or end of if statement".to_string(),
-                                    )),
-                                }
-                            }
-                            _ => Err(ScriptingError::UnexpectedToken),
-                        }
-                    }
-                }
+        let mut else_index = None;
+        if self.current_token() == Token::Else {
+            self.advance();
+            else_index = Some(expressions.len());
+
+            let mut else_statements = Vec::new();
+            while self.current_token() != Token::EOF && self.current_token() != Token::End {
+                // Parse either a regular expression or another nested if
+                let statement = match self.current_token() {
+                    Token::If => self.parse_if()?, // Handle nested `if` here
+                    _ => self.parse_expression()?,
+                };
+                else_statements.push(statement);
             }
-            _ => Err(ScriptingError::UnexpectedToken),
+
+            if self.current_token() == Token::End {
+                self.advance();
+                conditions.extend(expressions);
+                conditions.extend(else_statements);
+                return Ok(Box::new(Node::If(conditions, else_index)));
+            } else {
+                return Err(self.error_message("Expected `end` after `else` block"));
+            }
+        } else if self.current_token() == Token::End {
+            self.advance();
+            conditions.extend(expressions);
+            return Ok(Box::new(Node::If(conditions, else_index)));
+        } else {
+            return Err(self.error_message("Expected `else` or `end` after `then` block"));
         }
     }
 
@@ -138,50 +176,48 @@ impl Parser {
         match self.current_token() {
             Token::Identifier(name) => {
                 self.advance();
-                Ok(Box::new(Node::Variable(Vec::new(), name, None)))
+                Ok(Box::new(Node::Variable(Vec::new(), name, OnceLock::new())))
             }
-            _ => Err(ScriptingError::UnexpectedToken),
+            _ => Err(ScriptingError::UnexpectedToken(format!(
+                "{:?}",
+                self.current_token()
+            ))),
         }
     }
 
     pub fn parse_assign(&self, lhs: ExpressionTree) -> Result<ExpressionTree> {
-        match self.current_token() {
-            Token::Assign => {
-                self.advance();
-                match self.current_token() {
-                    Token::EOF => Err(ScriptingError::InvalidSyntax(
-                        "Unexpected end of assignment".to_string(),
-                    )),
-                    _ => {
-                        let rhs = self.parse_expr()?;
-                        Ok(Box::new(Node::Assign(vec![lhs, rhs])))
-                    }
-                }
-            }
-            _ => Err(ScriptingError::UnexpectedToken),
-        }
+        self.expect_token(Token::Assign)?;
+        self.advance(); // Advance past the '=' token
+
+        let rhs = self.parse_expr()?; // Parse the right-hand side of the assignment
+
+        // Check for semicolon after the assignment expression
+        self.expect_token(Token::Semicolon)?;
+        self.advance(); // Advance past the ';' token
+
+        // Create and return the assignment node
+        Ok(Box::new(Node::Assign(vec![lhs, rhs])))
     }
 
     pub fn parse_constant(&self) -> Result<ExpressionTree> {
-        match self.current_token() {
-            Token::Value(value, boolean) => match boolean {
-                Some(true) => {
-                    self.advance();
-                    Ok(Box::new(Node::True))
-                }
-                Some(false) => {
-                    self.advance();
-                    Ok(Box::new(Node::False))
-                }
+        if let Token::Value(value, boolean) = self.current_token() {
+            self.advance(); // Advance immediately after checking the token
+            match boolean {
+                Some(true) => Ok(Box::new(Node::True)),
+                Some(false) => Ok(Box::new(Node::False)),
                 None => match value {
-                    Some(v) => {
-                        self.advance();
-                        Ok(Box::new(Node::Constant(v)))
-                    }
-                    None => Err(ScriptingError::UnexpectedToken),
+                    Some(v) => Ok(Box::new(Node::Constant(v))),
+                    None => Err(ScriptingError::UnexpectedToken(format!(
+                        "{:?}",
+                        self.current_token()
+                    ))),
                 },
-            },
-            _ => Err(ScriptingError::UnexpectedToken),
+            }
+        } else {
+            Err(ScriptingError::UnexpectedToken(format!(
+                "{:?}",
+                self.current_token()
+            )))
         }
     }
 
@@ -191,55 +227,60 @@ impl Parser {
 
     pub fn parse_conditions(&self) -> Result<Vec<ExpressionTree>> {
         let mut conditions = Vec::new();
-        while self.current_token() != Token::EOF && self.current_token() != Token::Then {
-            let lhs = self.parse_condition_element()?;
-            match self.current_token() {
-                Token::And => {
-                    self.advance();
-                    let rhs = self.parse_condition_element()?;
-                    conditions.push(Box::new(Node::And(vec![lhs, rhs])));
-                }
-                Token::Or => {
-                    self.advance();
-                    let rhs = self.parse_condition_element()?;
-                    conditions.push(Box::new(Node::Or(vec![lhs, rhs])));
-                }
-                Token::Then => conditions.push(lhs),
-                _ => return Err(ScriptingError::UnexpectedToken),
-            }
+        let mut condition = self.parse_condition_element()?;
+
+        // Loop to handle all logical operators within a condition
+        while matches!(self.current_token(), Token::And | Token::Or) {
+            let operator = self.current_token();
+            self.advance(); // Move past the logical operator
+
+            let rhs = self.parse_condition_element()?; // Parse the right-hand side condition
+            condition = match operator {
+                Token::And => Box::new(Node::And(vec![condition, rhs])),
+                Token::Or => Box::new(Node::Or(vec![condition, rhs])),
+                _ => return Err(ScriptingError::UnexpectedToken(format!("{:?}", operator))),
+            };
         }
+
+        conditions.push(condition);
         Ok(conditions)
     }
 
     pub fn parse_condition_element(&self) -> Result<ExpressionTree> {
-        let lhs = self.parse_expr()?;
-        if self.current_token() == Token::EOF {
-            return Err(ScriptingError::InvalidSyntax(
-                "Unexpected end of condition".to_string(),
-            ));
-        }
+        // Parse the left-hand side expression
+        let lhs = self.parse_expr_l2()?; // Or another appropriate parsing level
 
+        // Match a comparison operator and advance to the next token
         let comparator = self.current_token();
-        self.advance();
-        if self.current_token() == Token::EOF {
-            return Err(ScriptingError::InvalidSyntax(
-                "Unexpected end of condition".to_string(),
-            ));
-        }
-        let rhs = self.parse_expr()?;
-
         match comparator {
-            Token::Equal => Ok(Box::new(Node::Equal(vec![lhs, rhs]))),
-            Token::NotEqual => Ok(Box::new(Node::NotEqual(vec![lhs, rhs]))),
-            Token::Superior => Ok(Box::new(Node::Superior(vec![lhs, rhs]))),
-            Token::Inferior => Ok(Box::new(Node::Inferior(vec![lhs, rhs]))),
-            Token::SuperiorOrEqual => Ok(Box::new(Node::SuperiorOrEqual(vec![lhs, rhs]))),
-            Token::InferiorOrEqual => Ok(Box::new(Node::InferiorOrEqual(vec![lhs, rhs]))),
-            Token::EOF => Err(ScriptingError::InvalidSyntax(
-                "Unexpected end of condition".to_string(),
-            )),
-            _ => Err(ScriptingError::UnexpectedToken),
+            Token::Equal
+            | Token::NotEqual
+            | Token::Superior
+            | Token::Inferior
+            | Token::SuperiorOrEqual
+            | Token::InferiorOrEqual => {
+                self.advance(); // Move to the right-hand side expression
+            }
+            _ => {
+                return Err(ScriptingError::UnexpectedToken(format!("{:?}", comparator)));
+            }
         }
+
+        // Parse the right-hand side expression
+        let rhs = self.parse_expr_l2()?; // Or another appropriate parsing level
+
+        // Create the appropriate comparison node
+        let comparison_node = match comparator {
+            Token::Equal => Box::new(Node::Equal(vec![lhs, rhs])),
+            Token::NotEqual => Box::new(Node::NotEqual(vec![lhs, rhs])),
+            Token::Superior => Box::new(Node::Superior(vec![lhs, rhs])),
+            Token::Inferior => Box::new(Node::Inferior(vec![lhs, rhs])),
+            Token::SuperiorOrEqual => Box::new(Node::SuperiorOrEqual(vec![lhs, rhs])),
+            Token::InferiorOrEqual => Box::new(Node::InferiorOrEqual(vec![lhs, rhs])),
+            _ => return Err(ScriptingError::UnexpectedToken(format!("{:?}", comparator))),
+        };
+
+        Ok(comparison_node)
     }
 
     pub fn find_matching_parentheses(&self) -> Result<usize> {
@@ -249,11 +290,7 @@ impl Parser {
             match self.tokens.borrow().get(index) {
                 Some(Token::OpenParen) => open_parens += 1,
                 Some(Token::CloseParen) => open_parens -= 1,
-                Some(Token::EOF) => {
-                    return Err(ScriptingError::InvalidSyntax(
-                        "Expected closing parenthesis".to_string(),
-                    ))
-                }
+                Some(Token::EOF) => return Err(self.error_message("Expected closing parenthesis")),
                 _ => (),
             }
             index += 1;
@@ -271,24 +308,27 @@ impl Parser {
                         self.advance();
                         Ok(expr)
                     }
-                    _ => Err(ScriptingError::InvalidSyntax(
-                        "Expected closing parenthesis".to_string(),
-                    )),
+                    _ => Err(self.error_message("Expected closing parenthesis")),
                 }
             }
-            _ => Err(ScriptingError::UnexpectedToken),
+            _ => Err(ScriptingError::UnexpectedToken(format!(
+                "{:?}",
+                self.current_token()
+            ))),
         }
     }
 
     pub fn parse_function_args(&self) -> Result<Vec<ExpressionTree>> {
+        self.expect_token(Token::OpenParen)?;
+        self.advance();
         let mut args = Vec::new();
         while self.current_token() != Token::CloseParen {
-            let arg = self.parse_expression()?;
+            let arg = self.parse_expr()?;
             args.push(arg);
             match self.current_token() {
                 Token::Comma => self.advance(),
                 Token::CloseParen => (),
-                _ => return Err(ScriptingError::InvalidSyntax("Expected comma".to_string())),
+                _ => return Err(self.error_message("Expected comma or closing parenthesis")),
             };
         }
         Ok(args)
@@ -305,47 +345,53 @@ impl Parser {
         let mut expr = None;
         match self.current_token() {
             Token::Identifier(name) => match name.as_str() {
-                "LN" => {
+                "ln" => {
                     min_args = 1;
                     max_args = 1;
                     expr = Some(Node::Ln(Vec::new()));
                 }
-                "EXP" => {
+                "exp" => {
                     min_args = 1;
                     max_args = 1;
                     expr = Some(Node::Exp(Vec::new()));
                 }
-                "POW" => {
+                "pow" => {
                     min_args = 2;
                     max_args = 2;
                     expr = Some(Node::Pow(Vec::new()));
                 }
-                "MIN" => {
+                "min" => {
                     min_args = 2;
                     max_args = 100;
                     expr = Some(Node::Min(Vec::new()));
                 }
-                "MAX" => {
+                "max" => {
                     min_args = 2;
                     max_args = 100;
                     expr = Some(Node::Max(Vec::new()));
                 }
                 _ => (),
             },
-            _ => (),
+            _ => {
+                return Err(ScriptingError::UnexpectedToken(format!(
+                    "{:?}",
+                    self.current_token()
+                )))
+            }
         }
-
+        self.advance();
         if expr.is_some() {
             let args = self.parse_function_args()?;
+            self.expect_token(Token::CloseParen)?;
+            self.advance();
             if args.len() < min_args || args.len() > max_args {
-                return Err(ScriptingError::InvalidSyntax(
-                    "Invalid number of arguments".to_string(),
-                ));
+                return Err(self.error_message("Invalid number of arguments"));
             }
             args.iter()
                 .for_each(|arg| expr.as_mut().unwrap().add_child(arg.clone()));
             return Ok(Box::new(expr.unwrap()));
         }
+
         self.parse_variable()
     }
 
@@ -367,9 +413,7 @@ impl Parser {
                         self.advance();
                         Ok(expr)
                     }
-                    _ => Err(ScriptingError::InvalidSyntax(
-                        "Expected closing parenthesis".to_string(),
-                    )),
+                    _ => Err(self.error_message("Expected closing parenthesis")),
                 }
             }
             _ => fun_on_no_match(self),
@@ -380,22 +424,27 @@ impl Parser {
         let mut lhs = self.parse_expr_l2()?;
 
         while self.current_token() == Token::Plus
-            || self.current_token() == Token::Minus && self.current_token() != Token::EOF
+            || self.current_token() == Token::Minus
+            || self.current_token() == Token::And
+            || self.current_token() == Token::Or && self.current_token() != Token::EOF
         {
             let token = self.current_token();
             self.advance();
             match self.current_token() {
-                Token::EOF => {
-                    return Err(ScriptingError::InvalidSyntax(
-                        "Unexpected end of expression".to_string(),
-                    ))
-                }
+                Token::EOF => return Err(self.error_message("Unexpected end of expression")),
                 _ => {
                     let rhs = self.parse_expr_l2()?;
                     lhs = match token {
                         Token::Plus => Box::new(Node::Add(vec![lhs, rhs])),
                         Token::Minus => Box::new(Node::Subtract(vec![lhs, rhs])),
-                        _ => return Err(ScriptingError::UnexpectedToken),
+                        Token::And => Box::new(Node::And(vec![lhs, rhs])),
+                        Token::Or => Box::new(Node::Or(vec![lhs, rhs])),
+                        _ => {
+                            return Err(ScriptingError::UnexpectedToken(format!(
+                                "{:?}",
+                                self.current_token()
+                            )))
+                        }
                     };
                 }
             }
@@ -412,17 +461,18 @@ impl Parser {
             let token = self.current_token();
             self.advance();
             match self.current_token() {
-                Token::EOF => {
-                    return Err(ScriptingError::InvalidSyntax(
-                        "Unexpected end of expression".to_string(),
-                    ))
-                }
+                Token::EOF => return Err(self.error_message("Unexpected end of expression")),
                 _ => {
                     let rhs = self.parse_expr_l3()?;
                     lhs = match token {
                         Token::Multiply => Box::new(Node::Multiply(vec![lhs, rhs])),
                         Token::Divide => Box::new(Node::Divide(vec![lhs, rhs])),
-                        _ => return Err(ScriptingError::UnexpectedToken),
+                        _ => {
+                            return Err(ScriptingError::UnexpectedToken(format!(
+                                "{:?}",
+                                self.current_token()
+                            )))
+                        }
                     };
                 }
             }
@@ -436,11 +486,7 @@ impl Parser {
         while self.current_token() == Token::Power && self.current_token() != Token::EOF {
             self.advance();
             match self.current_token() {
-                Token::EOF => {
-                    return Err(ScriptingError::InvalidSyntax(
-                        "Unexpected end of expression".to_string(),
-                    ))
-                }
+                Token::EOF => return Err(self.error_message("Unexpected end of expression")),
                 _ => {
                     let rhs = self.parse_var_const_func()?;
                     lhs = Box::new(Node::Pow(vec![lhs, rhs]));
@@ -468,19 +514,96 @@ impl Parser {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests_advance {
     use super::*;
     use crate::parsers::lexer::Lexer;
 
     #[test]
-    fn test_variable_assignment() {
-        let tokens = Lexer::new("a = 1".to_string()).tokenize().unwrap();
+    fn test_advance_token() {
+        let tokens = Lexer::new("a = 1;".to_string()).tokenize().unwrap();
+        let parser = Parser::new(tokens);
+        assert_eq!(parser.current_token(), Token::Identifier("a".to_string()));
+        parser.advance();
+        assert_eq!(parser.current_token(), Token::Assign);
+        parser.advance();
+        assert_eq!(parser.current_token(), Token::Value(Some(1.0), None));
+        parser.advance();
+        assert_eq!(parser.current_token(), Token::Semicolon);
+        parser.advance();
+        assert_eq!(parser.current_token(), Token::EOF);
+    }
+
+    #[test]
+    fn test_advance_token_with_newlines() {
+        let tokens = Lexer::new("a = 1;\n\n".to_string()).tokenize().unwrap();
+
+        let parser = Parser::new(tokens);
+        assert_eq!(parser.current_token(), Token::Identifier("a".to_string()));
+        parser.advance();
+        assert_eq!(parser.current_token(), Token::Assign);
+        parser.advance();
+        assert_eq!(parser.current_token(), Token::Value(Some(1.0), None));
+        parser.advance();
+        assert_eq!(parser.current_token(), Token::Semicolon);
+        parser.advance();
+        assert_eq!(parser.current_token(), Token::EOF);
+    }
+}
+
+#[cfg(test)]
+mod tests_expect_token {
+    use std::sync::OnceLock;
+
+    use crate::{
+        nodes::node::Node,
+        parsers::{lexer::Lexer, parser::Parser},
+    };
+
+    #[test]
+    fn test_parse_empty() {
+        let tokens = Lexer::new("".to_string()).tokenize().unwrap();
         let parser = Parser::new(tokens);
         let result = parser.parse().unwrap();
-        println!("{:?}", result);
+        assert_eq!(result, Box::new(Node::Base(Vec::new())));
+    }
+
+    #[test]
+    fn test_handle_newline() {
+        let tokens = Lexer::new("\n\n\n".to_string()).tokenize().unwrap();
+        let parser = Parser::new(tokens);
+        let result = parser.parse().unwrap();
+        assert_eq!(result, Box::new(Node::Base(Vec::new())));
+    }
+
+    #[test]
+    fn test_variable_assignment() {
+        let tokens = Lexer::new("a = 1;".to_string()).tokenize().unwrap();
+        let parser = Parser::new(tokens);
+        let result = parser.parse().unwrap();
 
         let expected = Box::new(Node::Base(vec![Box::new(Node::Assign(vec![
-            Box::new(Node::Variable(Vec::new(), "a".to_string(), None)),
+            Box::new(Node::Variable(Vec::new(), "a".to_string(), OnceLock::new())),
+            Box::new(Node::Constant(1.0)),
+        ]))]));
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_variable_assignment_with_new_lines() {
+        let tokens = Lexer::new(
+            "a = 1;
+        
+        "
+            .to_string(),
+        )
+        .tokenize()
+        .unwrap();
+        let parser = Parser::new(tokens);
+        let result = parser.parse().unwrap();
+
+        let expected = Box::new(Node::Base(vec![Box::new(Node::Assign(vec![
+            Box::new(Node::Variable(Vec::new(), "a".to_string(), OnceLock::new())),
             Box::new(Node::Constant(1.0)),
         ]))]));
 
@@ -489,21 +612,29 @@ mod tests {
 
     #[test]
     fn test_if_statement() {
-        let tokens = Lexer::new("if a == 1 then b = 2 end".to_string())
-            .tokenize()
-            .unwrap();
+        let tokens = Lexer::new(
+            "
+        
+        if a == 1 then 
+            b = 2; 
+        end
+        
+        "
+            .to_string(),
+        )
+        .tokenize()
+        .unwrap();
         let parser = Parser::new(tokens);
         let result = parser.parse().unwrap();
-        println!("{:?}", result);
 
         let expected = Box::new(Node::Base(vec![Box::new(Node::If(
             vec![
                 Box::new(Node::Equal(vec![
-                    Box::new(Node::Variable(Vec::new(), "a".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "a".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(1.0)),
                 ])),
                 Box::new(Node::Assign(vec![
-                    Box::new(Node::Variable(Vec::new(), "b".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "b".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(2.0)),
                 ])),
             ],
@@ -514,24 +645,33 @@ mod tests {
 
     #[test]
     fn test_if_else_statement() {
-        let tokens = Lexer::new("if a == 1 then b = 2 else b = 3 end".to_string())
-            .tokenize()
-            .unwrap();
+        let tokens = Lexer::new(
+            "
+        if a == 1 then 
+        b = 2; 
+        else 
+        b = 3; 
+        end
+        "
+            .to_string(),
+        )
+        .tokenize()
+        .unwrap();
         let parser = Parser::new(tokens);
         let result = parser.parse().unwrap();
 
         let expected = Box::new(Node::Base(vec![Box::new(Node::If(
             vec![
                 Box::new(Node::Equal(vec![
-                    Box::new(Node::Variable(Vec::new(), "a".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "a".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(1.0)),
                 ])),
                 Box::new(Node::Assign(vec![
-                    Box::new(Node::Variable(Vec::new(), "b".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "b".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(2.0)),
                 ])),
                 Box::new(Node::Assign(vec![
-                    Box::new(Node::Variable(Vec::new(), "b".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "b".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(3.0)),
                 ])),
             ],
@@ -547,45 +687,45 @@ mod tests {
             "
             if a == 1 then 
                 if b == 2 then 
-                    c = 3 
+                    c = 3;
                 else 
-                    c = 4 
+                    c = 4;
                 end 
             else 
-                c = 5 
+                c = 5;
             end"
             .to_string(),
         )
         .tokenize()
         .unwrap();
-        let parser = Parser::new(tokens);
-        let result = parser.parse().unwrap();
+
+        let result = Parser::new(tokens).parse().unwrap();
 
         let expected = Box::new(Node::Base(vec![Box::new(Node::If(
             vec![
                 Box::new(Node::Equal(vec![
-                    Box::new(Node::Variable(Vec::new(), "a".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "a".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(1.0)),
                 ])),
                 Box::new(Node::If(
                     vec![
                         Box::new(Node::Equal(vec![
-                            Box::new(Node::Variable(Vec::new(), "b".to_string(), None)),
+                            Box::new(Node::Variable(Vec::new(), "b".to_string(), OnceLock::new())),
                             Box::new(Node::Constant(2.0)),
                         ])),
                         Box::new(Node::Assign(vec![
-                            Box::new(Node::Variable(Vec::new(), "c".to_string(), None)),
+                            Box::new(Node::Variable(Vec::new(), "c".to_string(), OnceLock::new())),
                             Box::new(Node::Constant(3.0)),
                         ])),
                         Box::new(Node::Assign(vec![
-                            Box::new(Node::Variable(Vec::new(), "c".to_string(), None)),
+                            Box::new(Node::Variable(Vec::new(), "c".to_string(), OnceLock::new())),
                             Box::new(Node::Constant(4.0)),
                         ])),
                     ],
                     Some(1),
                 )),
                 Box::new(Node::Assign(vec![
-                    Box::new(Node::Variable(Vec::new(), "c".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "c".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(5.0)),
                 ])),
             ],
@@ -601,15 +741,15 @@ mod tests {
             "
             if a == 1 then 
                 if b == 2 then 
-                    c = 3 
-                    d = 4
+                    c = 3; 
+                    d = 4;
                 else 
-                    c = 5 
-                    d = 6
+                    c = 5;
+                    d = 6;
                 end 
             else 
-                c = 7 
-                d = 8
+                c = 7;
+                d = 8;
             end"
             .to_string(),
         )
@@ -621,40 +761,40 @@ mod tests {
         let expected = Box::new(Node::Base(vec![Box::new(Node::If(
             vec![
                 Box::new(Node::Equal(vec![
-                    Box::new(Node::Variable(Vec::new(), "a".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "a".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(1.0)),
                 ])),
                 Box::new(Node::If(
                     vec![
                         Box::new(Node::Equal(vec![
-                            Box::new(Node::Variable(Vec::new(), "b".to_string(), None)),
+                            Box::new(Node::Variable(Vec::new(), "b".to_string(), OnceLock::new())),
                             Box::new(Node::Constant(2.0)),
                         ])),
                         Box::new(Node::Assign(vec![
-                            Box::new(Node::Variable(Vec::new(), "c".to_string(), None)),
+                            Box::new(Node::Variable(Vec::new(), "c".to_string(), OnceLock::new())),
                             Box::new(Node::Constant(3.0)),
                         ])),
                         Box::new(Node::Assign(vec![
-                            Box::new(Node::Variable(Vec::new(), "d".to_string(), None)),
+                            Box::new(Node::Variable(Vec::new(), "d".to_string(), OnceLock::new())),
                             Box::new(Node::Constant(4.0)),
                         ])),
                         Box::new(Node::Assign(vec![
-                            Box::new(Node::Variable(Vec::new(), "c".to_string(), None)),
+                            Box::new(Node::Variable(Vec::new(), "c".to_string(), OnceLock::new())),
                             Box::new(Node::Constant(5.0)),
                         ])),
                         Box::new(Node::Assign(vec![
-                            Box::new(Node::Variable(Vec::new(), "d".to_string(), None)),
+                            Box::new(Node::Variable(Vec::new(), "d".to_string(), OnceLock::new())),
                             Box::new(Node::Constant(6.0)),
                         ])),
                     ],
                     Some(2),
                 )),
                 Box::new(Node::Assign(vec![
-                    Box::new(Node::Variable(Vec::new(), "c".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "c".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(7.0)),
                 ])),
                 Box::new(Node::Assign(vec![
-                    Box::new(Node::Variable(Vec::new(), "d".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "d".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(8.0)),
                 ])),
             ],
@@ -669,12 +809,13 @@ mod tests {
         let tokens = Lexer::new(
             "
             if a == 1 and b == 2 then 
-                c = 3 
+                c = 3;
             end"
             .to_string(),
         )
         .tokenize()
         .unwrap();
+
         let parser = Parser::new(tokens);
         let result = parser.parse().unwrap();
 
@@ -682,16 +823,16 @@ mod tests {
             vec![
                 Box::new(Node::And(vec![
                     Box::new(Node::Equal(vec![
-                        Box::new(Node::Variable(Vec::new(), "a".to_string(), None)),
+                        Box::new(Node::Variable(Vec::new(), "a".to_string(), OnceLock::new())),
                         Box::new(Node::Constant(1.0)),
                     ])),
                     Box::new(Node::Equal(vec![
-                        Box::new(Node::Variable(Vec::new(), "b".to_string(), None)),
+                        Box::new(Node::Variable(Vec::new(), "b".to_string(), OnceLock::new())),
                         Box::new(Node::Constant(2.0)),
                     ])),
                 ])),
                 Box::new(Node::Assign(vec![
-                    Box::new(Node::Variable(Vec::new(), "c".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "c".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(3.0)),
                 ])),
             ],
@@ -703,7 +844,7 @@ mod tests {
         let tokens = Lexer::new(
             "
             if a == 1 or b == 2 then 
-                c = 3 
+                c = 3;
             end"
             .to_string(),
         )
@@ -716,16 +857,16 @@ mod tests {
             vec![
                 Box::new(Node::Or(vec![
                     Box::new(Node::Equal(vec![
-                        Box::new(Node::Variable(Vec::new(), "a".to_string(), None)),
+                        Box::new(Node::Variable(Vec::new(), "a".to_string(), OnceLock::new())),
                         Box::new(Node::Constant(1.0)),
                     ])),
                     Box::new(Node::Equal(vec![
-                        Box::new(Node::Variable(Vec::new(), "b".to_string(), None)),
+                        Box::new(Node::Variable(Vec::new(), "b".to_string(), OnceLock::new())),
                         Box::new(Node::Constant(2.0)),
                     ])),
                 ])),
                 Box::new(Node::Assign(vec![
-                    Box::new(Node::Variable(Vec::new(), "c".to_string(), None)),
+                    Box::new(Node::Variable(Vec::new(), "c".to_string(), OnceLock::new())),
                     Box::new(Node::Constant(3.0)),
                 ])),
             ],
@@ -733,5 +874,157 @@ mod tests {
         ))]));
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_if_new_variable() {
+        let tokens = Lexer::new(
+            "
+                x = 2;           
+                if x == 1 then
+                    z = 3;
+                    w = 4;
+                end
+            "
+            .to_string(),
+        )
+        .tokenize()
+        .unwrap();
+        let parser = Parser::new(tokens);
+        let result = parser.parse().unwrap();
+
+        let expected = Box::new(Node::Base(vec![
+            Box::new(Node::Assign(vec![
+                Box::new(Node::Variable(Vec::new(), "x".to_string(), OnceLock::new())),
+                Box::new(Node::Constant(2.0)),
+            ])),
+            Box::new(Node::If(
+                vec![
+                    Box::new(Node::Equal(vec![
+                        Box::new(Node::Variable(Vec::new(), "x".to_string(), OnceLock::new())),
+                        Box::new(Node::Constant(1.0)),
+                    ])),
+                    Box::new(Node::Assign(vec![
+                        Box::new(Node::Variable(Vec::new(), "z".to_string(), OnceLock::new())),
+                        Box::new(Node::Constant(3.0)),
+                    ])),
+                    Box::new(Node::Assign(vec![
+                        Box::new(Node::Variable(Vec::new(), "w".to_string(), OnceLock::new())),
+                        Box::new(Node::Constant(4.0)),
+                    ])),
+                ],
+                None,
+            )),
+        ]));
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_bool_variables_with_if() {
+        let tokens = Lexer::new(
+            "
+                x = true;
+                y = false;
+                if x == true then
+                    z = 3;
+                end
+            "
+            .to_string(),
+        )
+        .tokenize()
+        .unwrap();
+        let parser = Parser::new(tokens);
+        let result = parser.parse().unwrap();
+
+        let expected = Box::new(Node::Base(vec![
+            Box::new(Node::Assign(vec![
+                Box::new(Node::Variable(Vec::new(), "x".to_string(), OnceLock::new())),
+                Box::new(Node::True),
+            ])),
+            Box::new(Node::Assign(vec![
+                Box::new(Node::Variable(Vec::new(), "y".to_string(), OnceLock::new())),
+                Box::new(Node::False),
+            ])),
+            Box::new(Node::If(
+                vec![
+                    Box::new(Node::Equal(vec![
+                        Box::new(Node::Variable(Vec::new(), "x".to_string(), OnceLock::new())),
+                        Box::new(Node::True),
+                    ])),
+                    Box::new(Node::Assign(vec![
+                        Box::new(Node::Variable(Vec::new(), "z".to_string(), OnceLock::new())),
+                        Box::new(Node::Constant(3.0)),
+                    ])),
+                ],
+                None,
+            )),
+        ]));
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_multiple_bool_vars() {
+        let script = "
+            x = true;
+            y = false;
+            z = x and y;
+            w = x or y;       
+        "
+        .to_string();
+
+        let tokens = Lexer::new(script).tokenize().unwrap();
+        let nodes = Parser::new(tokens).parse().unwrap();
+
+        let expected = Box::new(Node::Base(vec![
+            Box::new(Node::Assign(vec![
+                Box::new(Node::Variable(Vec::new(), "x".to_string(), OnceLock::new())),
+                Box::new(Node::True),
+            ])),
+            Box::new(Node::Assign(vec![
+                Box::new(Node::Variable(Vec::new(), "y".to_string(), OnceLock::new())),
+                Box::new(Node::False),
+            ])),
+            Box::new(Node::Assign(vec![
+                Box::new(Node::Variable(Vec::new(), "z".to_string(), OnceLock::new())),
+                Box::new(Node::And(vec![
+                    Box::new(Node::Variable(Vec::new(), "x".to_string(), OnceLock::new())),
+                    Box::new(Node::Variable(Vec::new(), "y".to_string(), OnceLock::new())),
+                ])),
+            ])),
+            Box::new(Node::Assign(vec![
+                Box::new(Node::Variable(Vec::new(), "w".to_string(), OnceLock::new())),
+                Box::new(Node::Or(vec![
+                    Box::new(Node::Variable(Vec::new(), "x".to_string(), OnceLock::new())),
+                    Box::new(Node::Variable(Vec::new(), "y".to_string(), OnceLock::new())),
+                ])),
+            ])),
+        ]));
+
+        assert_eq!(nodes, expected);
+    }
+
+    #[test]
+    fn test_max_function() {
+        let script = "
+            z = max(1, 2);
+        "
+        .to_string();
+
+        let tokens = Lexer::new(script).tokenize().unwrap();
+        tokens.iter().for_each(|t| println!("{:?}", t));
+
+        let nodes = Parser::new(tokens).parse().unwrap();
+
+        let expected = Box::new(Node::Base(vec![Box::new(Node::Assign(vec![
+            Box::new(Node::Variable(Vec::new(), "z".to_string(), OnceLock::new())),
+            Box::new(Node::Max(vec![
+                Box::new(Node::Constant(1.0)),
+                Box::new(Node::Constant(2.0)),
+            ])),
+        ]))]));
+
+        assert_eq!(nodes, expected);
     }
 }

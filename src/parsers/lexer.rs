@@ -32,6 +32,7 @@ pub enum Token {
     Power,
     For,
     Semicolon, // for end of an expression or statement
+    Newline,   // for end of a line
     EOF,
 }
 
@@ -80,6 +81,12 @@ impl Lexer {
                     Ok(Token::Multiply)
                 }
             }
+            '#' => {
+                while self.peek_char() != '\n' && self.peek_char() != '\0' {
+                    self.next_char();
+                }
+                self.next_token()
+            }
             '/' => Ok(Token::Divide),
             '=' => {
                 if self.peek_char() == '=' {
@@ -89,6 +96,7 @@ impl Lexer {
                     Ok(Token::Assign)
                 }
             }
+            '\n' => Ok(Token::Newline),
             ',' => Ok(Token::Comma),
             '!' => {
                 if self.peek_char() == '=' {
@@ -164,7 +172,7 @@ impl Lexer {
     }
 
     fn skip_whitespace(&self) {
-        while self.peek_char().is_whitespace() {
+        while self.peek_char().is_whitespace() && self.peek_char() != '\n' {
             self.next_char();
         }
     }
@@ -229,8 +237,8 @@ mod tests {
             Token::And,
             Token::Or,
             Token::Not,
-            Token::Value(Some(1.0), None), // assuming true is represented as 1.0
-            Token::Value(Some(0.0), None), // assuming false is represented as 0.0
+            Token::Value(None, Some(true)), // assuming true is represented as 1.0
+            Token::Value(None, Some(false)), // assuming false is represented as 0.0
         ];
 
         let lexer = Lexer::new(input.to_string());
@@ -424,6 +432,160 @@ mod tests {
         let lexer = Lexer::new(input.to_string());
         let tokens = lexer.tokenize().unwrap();
 
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_and_not() {
+        let input = "and not";
+        let expected_tokens = vec![Token::And, Token::Not];
+
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_and_not_with_vars() {
+        let input = "x = y and z";
+
+        let expected_tokens = vec![
+            Token::Identifier("x".to_string()),
+            Token::Assign,
+            Token::Identifier("y".to_string()),
+            Token::And,
+            Token::Identifier("z".to_string()),
+        ];
+
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_new_lines() {
+        let input = "x = 10;\n y = 20;";
+        let expected_tokens = vec![
+            Token::Identifier("x".to_string()),
+            Token::Assign,
+            Token::Value(Some(10.0), None),
+            Token::Semicolon,
+            Token::Newline,
+            Token::Identifier("y".to_string()),
+            Token::Assign,
+            Token::Value(Some(20.0), None),
+            Token::Semicolon,
+        ];
+
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_and_not_with_vars_2() {
+        let input = "x = true;
+            y = false;
+            z = x and y;
+            w = x or y;";
+
+        let expected_tokens = vec![
+            Token::Identifier("x".to_string()),
+            Token::Assign,
+            Token::Value(None, Some(true)),
+            Token::Semicolon,
+            Token::Newline,
+            Token::Identifier("y".to_string()),
+            Token::Assign,
+            Token::Value(None, Some(false)),
+            Token::Semicolon,
+            Token::Newline,
+            Token::Identifier("z".to_string()),
+            Token::Assign,
+            Token::Identifier("x".to_string()),
+            Token::And,
+            Token::Identifier("y".to_string()),
+            Token::Semicolon,
+            Token::Newline,
+            Token::Identifier("w".to_string()),
+            Token::Assign,
+            Token::Identifier("x".to_string()),
+            Token::Or,
+            Token::Identifier("y".to_string()),
+            Token::Semicolon,
+        ];
+
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_skipt_coments() {
+        let input = " 1 #+ 2 ";
+        let expected_tokens = vec![Token::Value(Some(1.0), None)];
+
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(tokens, expected_tokens);
+
+        let input = " 1 ###+ 2## ";
+        let expected_tokens = vec![Token::Value(Some(1.0), None)];
+
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_power_operator() {
+        let input = "2 ** 3";
+        let expected_tokens = vec![
+            Token::Value(Some(2.0), None),
+            Token::Power,
+            Token::Value(Some(3.0), None),
+        ];
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_power_operator_with_parentheses() {
+        let input = "(2 + 3) ** 2";
+        let expected_tokens = vec![
+            Token::OpenParen,
+            Token::Value(Some(2.0), None),
+            Token::Plus,
+            Token::Value(Some(3.0), None),
+            Token::CloseParen,
+            Token::Power,
+            Token::Value(Some(2.0), None),
+        ];
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_max_function() {
+        let input = "max(2, 3)";
+        let expected_tokens = vec![
+            Token::Identifier("max".to_string()),
+            Token::OpenParen,
+            Token::Value(Some(2.0), None),
+            Token::Comma,
+            Token::Value(Some(3.0), None),
+            Token::CloseParen,
+        ];
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
         assert_eq!(tokens, expected_tokens);
     }
 }
