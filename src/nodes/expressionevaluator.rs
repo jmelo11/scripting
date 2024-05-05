@@ -965,7 +965,6 @@ mod script_tests {
         .to_string();
 
         let tokens = Lexer::new(script).tokenize().unwrap();
-        tokens.iter().for_each(|t| println!("{:?}", t));
         let nodes = Parser::new(tokens).parse().unwrap();
 
         let indexer = ExpressionIndexer::new();
@@ -1025,8 +1024,6 @@ mod script_tests {
 
         let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_size());
         evaluator.const_visit(nodes).unwrap();
-
-        println!("{:?}", evaluator.variables());
 
         assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(2.0));
         assert_eq!(*evaluator.variables().get(1).unwrap(), Value::Number(2.0));

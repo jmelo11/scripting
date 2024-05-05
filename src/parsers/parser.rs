@@ -379,8 +379,8 @@ impl Parser {
                 )))
             }
         }
-        self.advance();
         if expr.is_some() {
+            self.advance();
             let args = self.parse_function_args()?;
             self.expect_token(Token::CloseParen)?;
             self.advance();
