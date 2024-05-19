@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
+use rustatlas::currencies::enums::Currency;
+
 use super::lexer::Token;
 use crate::nodes::node::{ExpressionTree, Node};
 use crate::utils::errors::{Result, ScriptingError};
@@ -10,8 +12,10 @@ pub struct Parser {
     position: RefCell<usize>,
     line: RefCell<usize>,
     column: RefCell<usize>,
+    reserved_keywords: Vec<String>,
 }
 
+/// public methods
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         Self {
@@ -19,10 +23,51 @@ impl Parser {
             position: RefCell::new(0),
             line: RefCell::new(1),
             column: RefCell::new(1),
+            reserved_keywords: vec![
+                "if".to_string(),
+                "else".to_string(),
+                "and".to_string(),
+                "or".to_string(),
+                "true".to_string(),
+                "false".to_string(),
+                "spot".to_string(),
+                "pays".to_string(),
+                "exp".to_string(),
+                "ln".to_string(),
+                "pow".to_string(),
+                "min".to_string(),
+                "max".to_string(),
+            ],
         }
     }
 
-    pub fn current_token(&self) -> Token {
+    pub fn parse(&self) -> Result<ExpressionTree> {
+        let mut expressions = Vec::new();
+        while self.current_token() != Token::EOF {
+            if self.current_token() == Token::Newline {
+                self.advance();
+                continue;
+            }
+            let expr = self.parse_expression()?;
+            expressions.push(expr);
+        }
+        Ok(Box::new(Node::Base(expressions)))
+    }
+}
+
+/// private methods
+impl Parser {
+    /// Check if the word is a reserved keyword
+    fn expect_not_reserved(&self, word: &str) -> Result<()> {
+        if self.reserved_keywords.contains(&word.to_string()) {
+            Err(self.invalid_syntax_err("Reserved keyword"))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Get the current token
+    fn current_token(&self) -> Token {
         self.tokens
             .borrow()
             .get(*self.position.borrow())
@@ -30,14 +75,7 @@ impl Parser {
             .unwrap_or(Token::EOF)
     }
 
-    pub fn prev_token(&self) -> Token {
-        self.tokens
-            .borrow()
-            .get(*self.position.borrow() - 1)
-            .cloned()
-            .unwrap_or(Token::EOF)
-    }
-
+    /// Advance the position in the tokens
     fn advance(&self) {
         let mut pos = self.position.borrow_mut();
         let mut line = self.line.borrow_mut();
@@ -64,8 +102,8 @@ impl Parser {
         }
     }
 
-    // Generate an error message containing the current line and column
-    pub fn error_message(&self, msg: &str) -> ScriptingError {
+    /// Create a new error for invalid syntax
+    fn invalid_syntax_err(&self, msg: &str) -> ScriptingError {
         let line = *self.line.borrow();
         let column = *self.column.borrow();
         ScriptingError::InvalidSyntax(format!(
@@ -74,183 +112,172 @@ impl Parser {
         ))
     }
 
-    /// Verifies that the current token matches the expected token and advances the parser.
-    /// Returns an error if the token does not match.
-    pub fn expect_token(&self, expected: Token) -> Result<()> {
+    /// Create a new error for unexpected token
+    fn unexpected_token_err(&self, expected: Token, received: Token) -> ScriptingError {
+        let line = *self.line.borrow();
+        let column = *self.column.borrow();
+        ScriptingError::UnexpectedToken(format!(
+            "Error at line {}, column {}: Expected token {:?}, found {:?}",
+            line, column, expected, received
+        ))
+    }
+
+    /// Expect a token, if it is not the current token, return an error
+    fn expect_token(&self, expected: Token) -> Result<()> {
         if self.current_token() == expected {
             Ok(())
         } else {
-            Err(self.error_message(&format!(
-                "Expected token {:?}, found {:?}",
-                expected,
-                self.current_token()
-            )))
+            Err(self.unexpected_token_err(expected, self.current_token()))
         }
     }
-}
 
-impl Parser {
-    pub fn parse(&self) -> Result<ExpressionTree> {
-        let mut expressions = Vec::new();
-        while self.current_token() != Token::EOF {
-            if self.current_token() == Token::Newline {
-                self.advance();
-                continue;
-            }
-            let expr = self.parse_expression()?;
-            expressions.push(expr);
-        }
-        Ok(Box::new(Node::Base(expressions)))
-    }
-
-    pub fn parse_expression(&self) -> Result<ExpressionTree> {
+    /// Parse an expression
+    fn parse_expression(&self) -> Result<ExpressionTree> {
         match self.current_token() {
             Token::If => self.parse_if(),
-            Token::EOF => Err(self.error_message("Unexpected end of expression")),
+            Token::Pays => self.parse_pays(),
+            Token::EOF => Err(self.invalid_syntax_err("Unexpected end of expression")),
             _ => {
-                //let lhs = self.parse_variable()?;
                 let lhs = self.parse_variable()?;
                 match self.current_token() {
                     Token::Assign => self.parse_assign(lhs),
-                    Token::EOF => Err(self.error_message("Unexpected end of expression")),
-                    Token::Newline => Err(self.error_message("Unexpected newline")),
-                    _ => Err(ScriptingError::UnexpectedToken(format!(
-                        "{:?}",
-                        self.current_token()
-                    ))),
+                    Token::EOF => Err(self.invalid_syntax_err("Unexpected end of expression")),
+                    Token::Newline => Err(self.invalid_syntax_err("Unexpected newline")),
+                    _ => Err(self.invalid_syntax_err("Unexpected token")),
                 }
             }
         }
     }
 
-    pub fn parse_if(&self) -> Result<ExpressionTree> {
+    /// Parse a pays expression
+    fn parse_pays(&self) -> Result<ExpressionTree> {
+        self.expect_token(Token::Pays)?;
+        self.advance();
+        let mut pays = Vec::new();
+        while self.current_token() != Token::EOF {
+            let expr = self.parse_expr()?;
+            pays.push(expr);
+        }
+        Ok(Box::new(Node::Pays(pays, OnceLock::new())))
+    }
+
+    /// Parse an if expression
+    fn parse_if(&self) -> Result<ExpressionTree> {
         self.expect_token(Token::If)?;
         self.advance();
-        let mut conditions = self.parse_conditions()?;
+        let condition = self.parse_conditions()?;
 
-        self.expect_token(Token::Then)?;
+        self.expect_token(Token::OpenCurlyParen)?;
         self.advance();
 
-        let mut expressions = Vec::new();
-        while self.current_token() != Token::EOF
-            && self.current_token() != Token::Else
-            && self.current_token() != Token::End
-        {
+        let mut if_body = Vec::new();
+        while self.current_token() != Token::CloseCurlyParen {
+            if self.current_token() == Token::EOF {
+                return Err(self.invalid_syntax_err("Unexpected end of input in if body"));
+            }
             let expr = self.parse_expression()?;
-            expressions.push(expr);
+            if_body.push(expr);
         }
-
+        self.advance();
         let mut else_index = None;
         if self.current_token() == Token::Else {
             self.advance();
-            else_index = Some(expressions.len());
-
-            let mut else_statements = Vec::new();
-            while self.current_token() != Token::EOF && self.current_token() != Token::End {
-                // Parse either a regular expression or another nested if
-                let statement = match self.current_token() {
-                    Token::If => self.parse_if()?, // Handle nested `if` here
-                    _ => self.parse_expression()?,
-                };
-                else_statements.push(statement);
-            }
-
-            if self.current_token() == Token::End {
-                self.advance();
-                conditions.extend(expressions);
-                conditions.extend(else_statements);
-                return Ok(Box::new(Node::If(conditions, else_index)));
-            } else {
-                return Err(self.error_message("Expected `end` after `else` block"));
-            }
-        } else if self.current_token() == Token::End {
+            self.expect_token(Token::OpenCurlyParen)?;
             self.advance();
-            conditions.extend(expressions);
-            return Ok(Box::new(Node::If(conditions, else_index)));
-        } else {
-            return Err(self.error_message("Expected `else` or `end` after `then` block"));
+
+            else_index = Some(if_body.len());
+
+            while self.current_token() != Token::CloseCurlyParen {
+                if self.current_token() == Token::EOF {
+                    return Err(self.invalid_syntax_err("Unexpected end of input in else body"));
+                }
+                let expr = self.parse_expression()?;
+                if_body.push(expr);
+            }
+            self.advance();
         }
+
+        let mut nodes = condition;
+        nodes.append(&mut if_body);
+
+        Ok(Box::new(Node::If(nodes, else_index)))
     }
 
-    pub fn parse_variable(&self) -> Result<ExpressionTree> {
+    /// Parse a variable
+    fn parse_variable(&self) -> Result<ExpressionTree> {
         match self.current_token() {
             Token::Identifier(name) => {
+                self.expect_not_reserved(&name)?;
                 self.advance();
                 Ok(Box::new(Node::Variable(Vec::new(), name, OnceLock::new())))
             }
-            _ => Err(ScriptingError::UnexpectedToken(format!(
-                "{:?}",
-                self.current_token()
-            ))),
+            _ => Err(self
+                .unexpected_token_err(Token::Identifier("Any".to_string()), self.current_token())),
         }
     }
 
-    pub fn parse_assign(&self, lhs: ExpressionTree) -> Result<ExpressionTree> {
+    /// Parse a string
+    fn parse_string(&self) -> Result<ExpressionTree> {
+        match self.current_token() {
+            Token::String(string) => {
+                self.advance();
+                Ok(Box::new(Node::String(string)))
+            }
+            _ => Err(self.invalid_syntax_err("Invalid string, expected string literal")),
+        }
+    }
+
+    /// Parse an assign expression
+    fn parse_assign(&self, lhs: ExpressionTree) -> Result<ExpressionTree> {
         self.expect_token(Token::Assign)?;
-        self.advance(); // Advance past the '=' token
-
-        let rhs = self.parse_expr()?; // Parse the right-hand side of the assignment
-
-        // Check for semicolon after the assignment expression
+        self.advance();
+        let rhs = self.parse_expr()?;
         self.expect_token(Token::Semicolon)?;
-        self.advance(); // Advance past the ';' token
-
-        // Create and return the assignment node
+        self.advance();
         Ok(Box::new(Node::Assign(vec![lhs, rhs])))
     }
 
-    pub fn parse_constant(&self) -> Result<ExpressionTree> {
+    /// Parse a constant
+    fn parse_constant(&self) -> Result<ExpressionTree> {
         if let Token::Value(value, boolean) = self.current_token() {
-            self.advance(); // Advance immediately after checking the token
+            self.advance();
             match boolean {
                 Some(true) => Ok(Box::new(Node::True)),
                 Some(false) => Ok(Box::new(Node::False)),
                 None => match value {
                     Some(v) => Ok(Box::new(Node::Constant(v))),
-                    None => Err(ScriptingError::UnexpectedToken(format!(
-                        "{:?}",
-                        self.current_token()
-                    ))),
+                    None => Err(self.invalid_syntax_err("Invalid constant")),
                 },
             }
         } else {
-            Err(ScriptingError::UnexpectedToken(format!(
-                "{:?}",
-                self.current_token()
-            )))
+            Err(self.invalid_syntax_err("Invalid constant"))
         }
     }
 
-    pub fn parse_for(&self) -> Result<ExpressionTree> {
-        todo!("Implement for loop parsing")
-    }
-
-    pub fn parse_conditions(&self) -> Result<Vec<ExpressionTree>> {
+    /// Parse a condition
+    fn parse_conditions(&self) -> Result<Vec<ExpressionTree>> {
         let mut conditions = Vec::new();
         let mut condition = self.parse_condition_element()?;
 
-        // Loop to handle all logical operators within a condition
         while matches!(self.current_token(), Token::And | Token::Or) {
             let operator = self.current_token();
-            self.advance(); // Move past the logical operator
+            self.advance();
 
-            let rhs = self.parse_condition_element()?; // Parse the right-hand side condition
+            let rhs = self.parse_condition_element()?;
             condition = match operator {
                 Token::And => Box::new(Node::And(vec![condition, rhs])),
                 Token::Or => Box::new(Node::Or(vec![condition, rhs])),
-                _ => return Err(ScriptingError::UnexpectedToken(format!("{:?}", operator))),
+                _ => return Err(self.invalid_syntax_err("Invalid operator")),
             };
         }
-
         conditions.push(condition);
         Ok(conditions)
     }
 
-    pub fn parse_condition_element(&self) -> Result<ExpressionTree> {
-        // Parse the left-hand side expression
-        let lhs = self.parse_expr_l2()?; // Or another appropriate parsing level
+    /// Parse a condition element
+    fn parse_condition_element(&self) -> Result<ExpressionTree> {
+        let lhs = self.parse_expr_l2()?;
 
-        // Match a comparison operator and advance to the next token
         let comparator = self.current_token();
         match comparator {
             Token::Equal
@@ -259,17 +286,15 @@ impl Parser {
             | Token::Inferior
             | Token::SuperiorOrEqual
             | Token::InferiorOrEqual => {
-                self.advance(); // Move to the right-hand side expression
+                self.advance();
             }
             _ => {
-                return Err(ScriptingError::UnexpectedToken(format!("{:?}", comparator)));
+                return Err(self.invalid_syntax_err("Expected comparison operator"));
             }
         }
 
-        // Parse the right-hand side expression
-        let rhs = self.parse_expr_l2()?; // Or another appropriate parsing level
+        let rhs = self.parse_expr_l2()?;
 
-        // Create the appropriate comparison node
         let comparison_node = match comparator {
             Token::Equal => Box::new(Node::Equal(vec![lhs, rhs])),
             Token::NotEqual => Box::new(Node::NotEqual(vec![lhs, rhs])),
@@ -277,48 +302,14 @@ impl Parser {
             Token::Inferior => Box::new(Node::Inferior(vec![lhs, rhs])),
             Token::SuperiorOrEqual => Box::new(Node::SuperiorOrEqual(vec![lhs, rhs])),
             Token::InferiorOrEqual => Box::new(Node::InferiorOrEqual(vec![lhs, rhs])),
-            _ => return Err(ScriptingError::UnexpectedToken(format!("{:?}", comparator))),
+            _ => return Err(self.invalid_syntax_err("Invalid comparison operator")),
         };
 
         Ok(comparison_node)
     }
 
-    pub fn find_matching_parentheses(&self) -> Result<usize> {
-        let mut open_parens = 1;
-        let mut index = *self.position.borrow() + 1;
-        while open_parens > 0 {
-            match self.tokens.borrow().get(index) {
-                Some(Token::OpenParen) => open_parens += 1,
-                Some(Token::CloseParen) => open_parens -= 1,
-                Some(Token::EOF) => return Err(self.error_message("Expected closing parenthesis")),
-                _ => (),
-            }
-            index += 1;
-        }
-        Ok(index)
-    }
-
-    pub fn parse_condition_parentheses(&self) -> Result<ExpressionTree> {
-        match self.current_token() {
-            Token::OpenParen => {
-                self.advance();
-                let expr = self.parse_condition_element()?;
-                match self.current_token() {
-                    Token::CloseParen => {
-                        self.advance();
-                        Ok(expr)
-                    }
-                    _ => Err(self.error_message("Expected closing parenthesis")),
-                }
-            }
-            _ => Err(ScriptingError::UnexpectedToken(format!(
-                "{:?}",
-                self.current_token()
-            ))),
-        }
-    }
-
-    pub fn parse_function_args(&self) -> Result<Vec<ExpressionTree>> {
+    /// Parse a function arguments
+    fn parse_function_args(&self) -> Result<Vec<ExpressionTree>> {
         self.expect_token(Token::OpenParen)?;
         self.advance();
         let mut args = Vec::new();
@@ -328,18 +319,27 @@ impl Parser {
             match self.current_token() {
                 Token::Comma => self.advance(),
                 Token::CloseParen => (),
-                _ => return Err(self.error_message("Expected comma or closing parenthesis")),
+                _ => return Err(self.invalid_syntax_err("Expected comma or closing parenthesis")),
             };
         }
         Ok(args)
     }
 
-    pub fn parse_var_const_func(&self) -> Result<ExpressionTree> {
+    /// Parse a variable, constant or function
+    fn parse_var_const_func(&self) -> Result<ExpressionTree> {
+        // Check if the current token is a constant
         let try_const = self.parse_constant();
         if try_const.is_ok() {
             return try_const;
         }
 
+        // Check if the current token is a string
+        let try_string = self.parse_string();
+        if try_string.is_ok() {
+            return try_string;
+        }
+
+        // Check if the current token is a function
         let mut min_args = 0;
         let mut max_args = 0;
         let mut expr = None;
@@ -348,27 +348,30 @@ impl Parser {
                 "ln" => {
                     min_args = 1;
                     max_args = 1;
-                    expr = Some(Node::Ln(Vec::new()));
+                    expr = Some(Node::new_ln());
                 }
                 "exp" => {
                     min_args = 1;
                     max_args = 1;
-                    expr = Some(Node::Exp(Vec::new()));
+                    expr = Some(Node::new_exp());
                 }
                 "pow" => {
                     min_args = 2;
                     max_args = 2;
-                    expr = Some(Node::Pow(Vec::new()));
+                    expr = Some(Node::new_pow());
                 }
                 "min" => {
                     min_args = 2;
                     max_args = 100;
-                    expr = Some(Node::Min(Vec::new()));
+                    expr = Some(Node::new_min());
                 }
                 "max" => {
                     min_args = 2;
                     max_args = 100;
-                    expr = Some(Node::Max(Vec::new()));
+                    expr = Some(Node::new_max());
+                }
+                "spot" => {
+                    return self.parse_spot();
                 }
                 _ => (),
             },
@@ -385,42 +388,57 @@ impl Parser {
             self.expect_token(Token::CloseParen)?;
             self.advance();
             if args.len() < min_args || args.len() > max_args {
-                return Err(self.error_message("Invalid number of arguments"));
+                return Err(self.invalid_syntax_err("Invalid number of arguments"));
             }
             args.iter()
                 .for_each(|arg| expr.as_mut().unwrap().add_child(arg.clone()));
             return Ok(Box::new(expr.unwrap()));
         }
 
+        // Check if the current token is a variable
         self.parse_variable()
     }
 
-    pub fn parse_parentheses<T, U>(
-        &self,
-        fun_on_match: T,
-        fun_on_no_match: U,
-    ) -> Result<ExpressionTree>
-    where
-        T: Fn(&Parser) -> Result<ExpressionTree>,
-        U: Fn(&Parser) -> Result<ExpressionTree>,
-    {
-        match self.current_token() {
-            Token::OpenParen => {
-                self.advance();
-                let expr = fun_on_match(self)?;
-                match self.current_token() {
-                    Token::CloseParen => {
-                        self.advance();
-                        Ok(expr)
-                    }
-                    _ => Err(self.error_message("Expected closing parenthesis")),
-                }
+    /// Parse a spot expression
+    fn parse_spot(&self) -> Result<ExpressionTree> {
+        self.expect_token(Token::Identifier("spot".to_string()))?;
+        self.advance();
+        self.expect_token(Token::OpenParen)?;
+        self.advance();
+        let currency = match *self.parse_string()? {
+            Node::String(s) => {
+                Currency::try_from(s).map_err(|_| self.invalid_syntax_err("Invalid currency"))?
             }
-            _ => fun_on_no_match(self),
-        }
+            _ => return Err(self.invalid_syntax_err("Invalid argument, expected string")),
+        };
+        self.expect_token(Token::CloseParen)?;
+        self.advance();
+        Ok(Box::new(Node::Spot(currency, OnceLock::new())))
     }
 
-    pub fn parse_expr(&self) -> Result<ExpressionTree> {
+    // fn parse_parentheses<T, U>(&self, fun_on_match: T, fun_on_no_match: U) -> Result<ExpressionTree>
+    // where
+    //     T: Fn(&Parser) -> Result<ExpressionTree>,
+    //     U: Fn(&Parser) -> Result<ExpressionTree>,
+    // {
+    //     match self.current_token() {
+    //         Token::OpenParen => {
+    //             self.advance();
+    //             let expr = fun_on_match(self)?;
+    //             match self.current_token() {
+    //                 Token::CloseParen => {
+    //                     self.advance();
+    //                     Ok(expr)
+    //                 }
+    //                 _ => Err(self.invalid_syntax_err("Expected closing parenthesis")),
+    //             }
+    //         }
+    //         _ => fun_on_no_match(self),
+    //     }
+    // }
+
+    /// Parse an expression
+    fn parse_expr(&self) -> Result<ExpressionTree> {
         let mut lhs = self.parse_expr_l2()?;
 
         while self.current_token() == Token::Plus
@@ -431,7 +449,7 @@ impl Parser {
             let token = self.current_token();
             self.advance();
             match self.current_token() {
-                Token::EOF => return Err(self.error_message("Unexpected end of expression")),
+                Token::EOF => return Err(self.invalid_syntax_err("Unexpected end of expression")),
                 _ => {
                     let rhs = self.parse_expr_l2()?;
                     lhs = match token {
@@ -440,10 +458,7 @@ impl Parser {
                         Token::And => Box::new(Node::And(vec![lhs, rhs])),
                         Token::Or => Box::new(Node::Or(vec![lhs, rhs])),
                         _ => {
-                            return Err(ScriptingError::UnexpectedToken(format!(
-                                "{:?}",
-                                self.current_token()
-                            )))
+                            return Err(self.invalid_syntax_err("Invalid operator"));
                         }
                     };
                 }
@@ -452,7 +467,8 @@ impl Parser {
         Ok(lhs)
     }
 
-    pub fn parse_expr_l2(&self) -> Result<ExpressionTree> {
+    /// Parse an expression
+    fn parse_expr_l2(&self) -> Result<ExpressionTree> {
         let mut lhs = self.parse_expr_l3()?;
 
         while self.current_token() == Token::Multiply
@@ -461,17 +477,14 @@ impl Parser {
             let token = self.current_token();
             self.advance();
             match self.current_token() {
-                Token::EOF => return Err(self.error_message("Unexpected end of expression")),
+                Token::EOF => return Err(self.invalid_syntax_err("Unexpected end of expression")),
                 _ => {
                     let rhs = self.parse_expr_l3()?;
                     lhs = match token {
                         Token::Multiply => Box::new(Node::Multiply(vec![lhs, rhs])),
                         Token::Divide => Box::new(Node::Divide(vec![lhs, rhs])),
                         _ => {
-                            return Err(ScriptingError::UnexpectedToken(format!(
-                                "{:?}",
-                                self.current_token()
-                            )))
+                            return Err(self.invalid_syntax_err("Invalid operator"));
                         }
                     };
                 }
@@ -480,13 +493,14 @@ impl Parser {
         Ok(lhs)
     }
 
-    pub fn parse_expr_l3(&self) -> Result<ExpressionTree> {
+    /// Parse an expression
+    fn parse_expr_l3(&self) -> Result<ExpressionTree> {
         let mut lhs = self.parse_var_const_func()?;
 
         while self.current_token() == Token::Power && self.current_token() != Token::EOF {
             self.advance();
             match self.current_token() {
-                Token::EOF => return Err(self.error_message("Unexpected end of expression")),
+                Token::EOF => return Err(self.invalid_syntax_err("Unexpected end of expression")),
                 _ => {
                     let rhs = self.parse_var_const_func()?;
                     lhs = Box::new(Node::Pow(vec![lhs, rhs]));
@@ -496,25 +510,25 @@ impl Parser {
         Ok(lhs)
     }
 
-    // unary plus and minus
-    pub fn parse_expr_l4(&self) -> Result<ExpressionTree> {
-        match self.current_token() {
-            Token::Plus => {
-                self.advance();
-                self.parse_expr_l4()
-            }
-            Token::Minus => {
-                self.advance();
-                let expr = self.parse_expr_l4()?;
-                Ok(Box::new(Node::UnaryMinus(vec![expr])))
-            }
-            _ => self.parse_parentheses(Parser::parse_expr, Parser::parse_var_const_func),
-        }
-    }
+    // fn parse_expr_l4(&self) -> Result<ExpressionTree> {
+    //     match self.current_token() {
+    //         Token::Plus => {
+    //             self.advance();
+    //             self.parse_expr_l4()
+    //         }
+    //         Token::Minus => {
+    //             self.advance();
+    //             let expr = self.parse_expr_l4()?;
+    //             Ok(Box::new(Node::UnaryMinus(vec![expr])))
+    //         }
+    //         _ => self.parse_parentheses(Parser::parse_expr, Parser::parse_var_const_func),
+    //     }
+    // }
 }
 
+/// Tests for the `advance` method
 #[cfg(test)]
-mod tests_advance {
+mod general_tests {
     use super::*;
     use crate::parsers::lexer::Lexer;
 
@@ -550,9 +564,12 @@ mod tests_advance {
     }
 }
 
+/// Tests for the `parse` method
 #[cfg(test)]
 mod tests_expect_token {
     use std::sync::OnceLock;
+
+    use rustatlas::currencies::enums::Currency;
 
     use crate::{
         nodes::node::Node,
@@ -591,14 +608,7 @@ mod tests_expect_token {
 
     #[test]
     fn test_variable_assignment_with_new_lines() {
-        let tokens = Lexer::new(
-            "a = 1;
-        
-        "
-            .to_string(),
-        )
-        .tokenize()
-        .unwrap();
+        let tokens = Lexer::new("a = 1;".to_string()).tokenize().unwrap();
         let parser = Parser::new(tokens);
         let result = parser.parse().unwrap();
 
@@ -614,12 +624,9 @@ mod tests_expect_token {
     fn test_if_statement() {
         let tokens = Lexer::new(
             "
-        
-        if a == 1 then 
-            b = 2; 
-        end
-        
-        "
+            if a == 1 { 
+                b = 2; 
+            }"
             .to_string(),
         )
         .tokenize()
@@ -647,11 +654,11 @@ mod tests_expect_token {
     fn test_if_else_statement() {
         let tokens = Lexer::new(
             "
-        if a == 1 then 
-        b = 2; 
-        else 
-        b = 3; 
-        end
+        if a == 1 { 
+            b = 2; 
+        } else {
+            b = 3; 
+        }
         "
             .to_string(),
         )
@@ -685,15 +692,15 @@ mod tests_expect_token {
     fn test_nested_if_else_statement() {
         let tokens = Lexer::new(
             "
-            if a == 1 then 
-                if b == 2 then 
+            if a == 1 { 
+                if b == 2 {
                     c = 3;
-                else 
+                }else {
                     c = 4;
-                end 
-            else 
+                }
+            } else {
                 c = 5;
-            end"
+            }"
             .to_string(),
         )
         .tokenize()
@@ -739,18 +746,18 @@ mod tests_expect_token {
     fn test_nested_if_else_statement_with_multiple_statements() {
         let tokens = Lexer::new(
             "
-            if a == 1 then 
-                if b == 2 then 
+            if a == 1 {
+                if b == 2 {
                     c = 3; 
                     d = 4;
-                else 
+                } else {
                     c = 5;
                     d = 6;
-                end 
-            else 
+                }
+            } else {
                 c = 7;
                 d = 8;
-            end"
+            }"
             .to_string(),
         )
         .tokenize()
@@ -808,9 +815,9 @@ mod tests_expect_token {
     fn test_if_multiple_conditions() {
         let tokens = Lexer::new(
             "
-            if a == 1 and b == 2 then 
+            if a == 1 and b == 2 { 
                 c = 3;
-            end"
+            }"
             .to_string(),
         )
         .tokenize()
@@ -843,9 +850,9 @@ mod tests_expect_token {
 
         let tokens = Lexer::new(
             "
-            if a == 1 or b == 2 then 
+            if a == 1 or b == 2 {
                 c = 3;
-            end"
+            }"
             .to_string(),
         )
         .tokenize();
@@ -881,10 +888,10 @@ mod tests_expect_token {
         let tokens = Lexer::new(
             "
                 x = 2;           
-                if x == 1 then
+                if x == 1 {
                     z = 3;
                     w = 4;
-                end
+                }
             "
             .to_string(),
         )
@@ -926,9 +933,9 @@ mod tests_expect_token {
             "
                 x = true;
                 y = false;
-                if x == true then
+                if x == true {
                     z = 3;
-                end
+                }
             "
             .to_string(),
         )
@@ -1026,5 +1033,228 @@ mod tests_expect_token {
         ]))]));
 
         assert_eq!(nodes, expected);
+    }
+
+    #[test]
+    fn test_string_variable() {
+        let script = "
+            x = \"hello\";
+        "
+        .to_string();
+
+        let tokens = Lexer::new(script).tokenize().unwrap();
+        let nodes = Parser::new(tokens).parse().unwrap();
+
+        let expected = Box::new(Node::Base(vec![Box::new(Node::Assign(vec![
+            Box::new(Node::Variable(Vec::new(), "x".to_string(), OnceLock::new())),
+            Box::new(Node::String("hello".to_string())),
+        ]))]));
+
+        assert_eq!(nodes, expected);
+    }
+
+    #[test]
+    fn test_spot_function() {
+        let script = "
+            x = spot(\"USD\");
+        "
+        .to_string();
+
+        let tokens = Lexer::new(script).tokenize().unwrap();
+        let nodes = Parser::new(tokens).parse().unwrap();
+
+        let expected = Box::new(Node::Base(vec![Box::new(Node::Assign(vec![
+            Box::new(Node::Variable(Vec::new(), "x".to_string(), OnceLock::new())),
+            Box::new(Node::Spot(Currency::USD, OnceLock::new())),
+        ]))]));
+
+        assert_eq!(nodes, expected);
+    }
+}
+
+/// tests for reserved keywords. These are keywords that are reserved in the scripting language
+/// and cannot be used as variable names
+#[cfg(test)]
+mod test_reserved_keywords {
+    #[test]
+    fn test_if_reserved() {
+        let script = "
+            if = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_else_reserved() {
+        let script = "
+            else = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_and_reserved() {
+        let script = "
+            and = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_or_reserved() {
+        let script = "
+            or = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_true_reserved() {
+        let script = "
+            true = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_false_reserved() {
+        let script = "
+            false = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_max_reserved() {
+        let script = "
+            max = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_min_reserved() {
+        let script = "
+            min = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_pow_reserved() {
+        let script = "
+            pow = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_ln_reserved() {
+        let script = "
+            ln = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_exp_reserved() {
+        let script = "
+            exp = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_spot_reserved() {
+        let script = "
+            spot = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
+    }
+
+    #[test]
+    fn test_pays_reserved() {
+        let script = "
+            pays = 1;
+        "
+        .to_string();
+
+        let tokens = crate::parsers::lexer::Lexer::new(script)
+            .tokenize()
+            .unwrap();
+        let nodes = crate::parsers::parser::Parser::new(tokens).parse();
+        assert!(nodes.is_err());
     }
 }
