@@ -51,6 +51,12 @@ The following methods are available in the scripting language:
 
 The following keywords are available in the scripting language:
 
+- `authorize`: Request approval for a transaction.
+- `finalize`: Flips the script's state if the scope is executed successfully.
+- `execute`: Execute a transaction.
+- `pays`: Indicates that the following value is a payment. Under the hood, it will be treated as a discounted value.
+- `decide`: Execute a decision-making process.
+
 ### `authorize`
 
 Request approval for a transaction.
@@ -60,16 +66,44 @@ Request approval for a transaction.
 
 ***Example***
 
+***Proposed syntax***
+
+Implementing the `authorize` keyword as a scope block:
+
 ```lua
-authorize
-    Buy("AAPL", "1234-5678-9012-3456", 100)
-end
+authorize {
+    Buy("AAPL", "1234-5678-9012-3456", 100);
+}
 ```
 
-***Under consideration***
+Interpretation: The `Buy` transaction will be executed only if the authorization is granted.
 
-- `decide`: Execute a decision-making process. Following the `decide` keyword, a transaction method should be called.
-  - More details are needed to understand the use case and the expected behavior of this keyword.
+***Alternative syntax***
+
+Implementing the `authorize` keyword as a function:
+
+```lua
+authorize = Authorize();
+if authorize {
+    Buy("AAPL", "1234-5678-9012-3456", 100);
+}
+```
+
+### `finalize`
+
+Flips the script's state if the scope is executed successfully.
+
+- The `finalize` keyword is used to indicate that the script is in a valid state and can proceed to the next stage.
+
+***Example***
+
+```lua
+finalize {
+    Buy("AAPL", "1234-5678-9012-3456", 100);
+}
+```
+
+Interpretation: If the `Buy` transaction is successful, the script will be marked as finalized and de-queued from the executor.
 
 ## Method Specifications
 
@@ -92,10 +126,10 @@ ation) price of a stock or currency.
 ***Example***
 
 ```lua
-spot = Spot("AAPL", "YahooFinance")
-if spot > 100 then
-    Notify("AAPL price is above 100")
-end
+spot = Spot("AAPL", "YahooFinance");
+if spot > 100 {
+    Notify("AAPL price is above 100");
+}
 ```
 
 ### `StockUnits`
@@ -116,9 +150,9 @@ This method retrieves the number of units of a stock held in a stock account. Th
 
 ```lua
 units = StockUnits("1234-5678-9012-3456", "AAPL"); 
-if units < 100 then 
+if units < 100 {
     Notify("AAPL units are below 100"); 
-end
+} 
 ```
 
 ### `PnL`
@@ -137,10 +171,10 @@ Calculate the profit and loss for a position. The method requires the account ID
 ***Example***
 
 ```lua
-pnl = PnL("1234-5678-9012-3456", "AAPL")
-if pnl > 0 then 
-    Notify("AAPL position is profitable")
-end
+pnl = PnL("1234-5678-9012-3456", "AAPL");
+if pnl > 0 {
+    Notify("AAPL position is profitable");
+}
 ```
 
 ### `AccountBalance`
@@ -159,8 +193,8 @@ This method retrieves the current balance of a cash account. The balance represe
 ***Example***
 
 ```lua
-balance = AccountBalance("1234-5678-9012-3456")
-Notify("Current balance is " + balance)
+balance = AccountBalance("1234-5678-9012-3456");
+Notify("Current balance is " + balance);
 ```
 
 ### `Sell`
@@ -179,7 +213,9 @@ Notify("Current balance is " + balance)
 ***Example***
 
 ```lua
-autorize Sell("AAPL", "1234-5678-9012-3456", 100)
+autorize {
+  Sell("AAPL", "1234-5678-9012-3456", 100);
+}
 ```
 
 ### `Buy`
@@ -200,9 +236,9 @@ autorize Sell("AAPL", "1234-5678-9012-3456", 100)
 ***Example***
 
 ```lua
-autorize 
-    Buy("AAPL", "1234-5678-9012-3456", 100)
-end
+autorize {
+  Buy("AAPL", "1234-5678-9012-3456", 100);
+}
 ```
 
 ### `TransferAmount`
@@ -221,9 +257,9 @@ end
 ***Example***
 
 ```lua
-autorize 
-    TransferAmount("1234-5678-9012-3456", "5678-9012-3456-1234", 100)
-end
+autorize {
+  TransferAmount("1234-5678-9012-3456", "5678-9012-3456-1234", 100);
+}
 ```
 
 ### `Notify`
@@ -241,5 +277,5 @@ Notify the user with a message. Needs to be configured in the pre-stage. Notific
 ***Example***
 
 ```lua
-Notify("AAPL price is above 100")
+Notify("AAPL price is above 100");
 ```

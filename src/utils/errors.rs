@@ -1,5 +1,5 @@
+use rustatlas::prelude::*;
 use thiserror::Error;
-
 #[derive(Debug, Error)]
 pub enum ScriptingError {
     #[error("Invalid Syntax: {0}")]
@@ -12,6 +12,8 @@ pub enum ScriptingError {
     UnexpectedToken(String),
     #[error("Error while evaluating: {0}")]
     EvaluationError(String),
+    #[error("AtlasError: {0}")]
+    AtlasError(#[from] AtlasError),
 }
 
 pub type Result<T> = std::result::Result<T, ScriptingError>;

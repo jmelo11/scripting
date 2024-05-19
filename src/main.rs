@@ -22,9 +22,9 @@ fn run_lefi_script(script: &str) -> Result<Vec<Value>> {
 
     // Index expressions and initialize evaluator (adjust according to your actual logic)
     let indexer = ExpressionIndexer::new();
-    indexer.visit(&nodes);
+    indexer.visit(&nodes).unwrap();
 
-    let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_size());
+    let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
     evaluator
         .const_visit(nodes)
         .map_err(|e| ScriptingError::from(e))?;
@@ -37,7 +37,7 @@ fn main() -> io::Result<()> {
     // Initialize CLI command argument parser
     let matches = Command::new("lefi-cli")
         .version("1.0")
-        .author("Your Name <your_email@example.com>")
+        .author("Jose Melo")
         .about("Runs a .lefi file using the custom LEFI language interpreter")
         .arg(
             Arg::new("input")

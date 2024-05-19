@@ -6,6 +6,7 @@ use crate::utils::errors::{Result, ScriptingError};
 pub enum Token {
     Value(Option<f64>, Option<bool>),
     Identifier(String),
+    String(String),
     Plus,
     Minus,
     Multiply,
@@ -16,6 +17,7 @@ pub enum Token {
     And,
     Or,
     Not,
+    Pays,
     Superior,
     Inferior,
     SuperiorOrEqual,
@@ -130,6 +132,7 @@ impl Lexer {
                     Ok(Token::Inferior)
                 }
             }
+            '\"' => self.read_string(),
             _ if ch.is_digit(10) => self.read_number(ch),
             _ if ch.is_alphabetic() => self.read_identifier(ch),
             _ => Err(ScriptingError::InvalidSyntax(format!(
@@ -137,6 +140,15 @@ impl Lexer {
                 ch
             ))),
         }
+    }
+
+    fn read_string(&self) -> Result<Token> {
+        let mut string = "".to_string();
+        while self.peek_char() != '\"' {
+            string.push(self.next_char());
+        }
+        self.next_char(); // consume the closing quote
+        Ok(Token::String(string))
     }
 
     // This function is used to read numerical literals, including floating point numbers.
@@ -167,6 +179,7 @@ impl Lexer {
             "for" => Ok(Token::For),
             "true" => Ok(Token::Value(None, Some(true))),
             "false" => Ok(Token::Value(None, Some(false))),
+            "pays" => Ok(Token::Pays),
             _ => Ok(Token::Identifier(identifier)),
         }
     }
@@ -584,6 +597,42 @@ mod tests {
             Token::Value(Some(3.0), None),
             Token::CloseParen,
         ];
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_pays() {
+        let input = "pays";
+        let expected_tokens = vec![Token::Pays];
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_string_literals() {
+        let input = "\"hello\"";
+        let expected_tokens = vec![Token::String("hello".to_string())];
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_string_literals_with_spaces() {
+        let input = "\"hello world\"";
+        let expected_tokens = vec![Token::String("hello world".to_string())];
+        let lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_string_literals_with_special_chars() {
+        let input = "\"hello world!\"";
+        let expected_tokens = vec![Token::String("hello world!".to_string())];
         let lexer = Lexer::new(input.to_string());
         let tokens = lexer.tokenize().unwrap();
         assert_eq!(tokens, expected_tokens);

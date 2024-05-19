@@ -1,5 +1,7 @@
 use std::sync::OnceLock;
 
+use rustatlas::prelude::*;
+
 use super::traits::{ConstVisitable, NodeConstVisitor, NodeVisitor, Visitable};
 
 pub type ExpressionTree = Box<Node>;
@@ -11,6 +13,11 @@ pub enum Node {
     // variables
     Variable(Vec<ExpressionTree>, String, OnceLock<usize>),
     Constant(f64),
+    String(String),
+
+    // financial
+    Spot(Currency, OnceLock<usize>),
+    Pays(Vec<ExpressionTree>, OnceLock<usize>),
 
     // math
     Add(Vec<ExpressionTree>),
@@ -158,6 +165,10 @@ impl Node {
         Node::False
     }
 
+    pub fn new_pays() -> Node {
+        Node::Pays(Vec::new(), OnceLock::new())
+    }
+
     pub fn add_child(&mut self, child: ExpressionTree) {
         match self {
             Node::Base(children) => children.push(child),
@@ -184,9 +195,12 @@ impl Node {
             Node::Ln(children) => children.push(child),
             Node::Pow(children) => children.push(child),
             Node::NotEqual(children) => children.push(child),
+            Node::Pays(children, _) => children.push(child),
+            Node::Spot(_, _) => panic!("Cannot add child to spot node"),
             Node::True => panic!("Cannot add child to true node"),
             Node::False => panic!("Cannot add child to false node"),
             Node::Constant(_) => panic!("Cannot add child to constant node"),
+            Node::String(_) => panic!("Cannot add child to string node"),
         }
     }
 
@@ -216,9 +230,12 @@ impl Node {
             Node::Ln(children) => children,
             Node::Pow(children) => children,
             Node::NotEqual(children) => children,
+            Node::Pays(children, _) => children,
+            Node::Spot(_, _) => panic!("Cannot get children from spot node"),
             Node::True => panic!("Cannot get children from true node"),
             Node::False => panic!("Cannot get children from false node"),
             Node::Constant(_) => panic!("Cannot get children from constant node"),
+            Node::String(_) => panic!("Cannot get children from string node"),
         }
     }
 }

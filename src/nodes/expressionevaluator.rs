@@ -1,3 +1,4 @@
+use rustatlas::prelude::*;
 use std::sync::Mutex;
 
 use super::{
@@ -5,24 +6,34 @@ use super::{
     traits::{ConstVisitable, NodeConstVisitor},
 };
 
-use crate::utils::errors::{Result, ScriptingError};
+use crate::{
+    utils::errors::{Result, ScriptingError},
+    ExpressionTree,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Bool(bool),
     Number(f64),
+    String(String),
     Null,
 }
 
-//type MarketData = Vec<f64>;
+pub type Scenario = Vec<MarketData>;
+pub type Numeraries = Vec<f64>;
+pub type Events = Vec<ExpressionTree>;
+
 #[allow(unused)]
 pub struct ExpressionEvaluator {
     variables: Mutex<Vec<Value>>,
     digit_stack: Mutex<Vec<f64>>,
     boolean_stack: Mutex<Vec<bool>>,
+    string_stack: Mutex<Vec<String>>,
     is_lhs_variable: Mutex<bool>,
     lhs_variable: Mutex<Option<Box<Node>>>,
-    current_event: Option<usize>,
+    current_scenario: Mutex<Option<usize>>,
+    scenarios: Mutex<Vec<Scenario>>,
+    numeraries: Mutex<Vec<Numeraries>>,
 }
 
 impl ExpressionEvaluator {
@@ -31,10 +42,24 @@ impl ExpressionEvaluator {
             variables: Mutex::new(Vec::new()),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn with_scenarios(self, scenarios: Vec<Scenario>) -> Self {
+        self.scenarios.lock().unwrap().clear();
+        self.scenarios.lock().unwrap().extend(scenarios);
+        self
+    }
+
+    pub fn with_current_scenario(self, scenario: usize) -> Self {
+        *self.current_scenario.lock().unwrap() = Some(scenario);
+        self
     }
 
     pub fn with_variables(self, n: usize) -> Self {
@@ -78,15 +103,14 @@ impl NodeConstVisitor for ExpressionEvaluator {
                             )))
                         }
                         Some(id) => {
-                            // let value = self.variables.lock().unwrap()[*id];
-                            // self.digit_stack.lock().unwrap().push(value);
-
-                            //let value = self.variables.lock().unwrap().get(*id).unwrap();
                             let vars = self.variables.lock().unwrap();
                             let value = vars.get(*id).unwrap();
                             match value {
                                 Value::Number(v) => self.digit_stack.lock().unwrap().push(*v),
                                 Value::Bool(v) => self.boolean_stack.lock().unwrap().push(*v),
+                                Value::String(v) => {
+                                    self.string_stack.lock().unwrap().push(v.clone())
+                                }
                                 Value::Null => {
                                     return Err(ScriptingError::EvaluationError(format!(
                                         "Variable {} not initialized",
@@ -99,9 +123,65 @@ impl NodeConstVisitor for ExpressionEvaluator {
                     }
                 }
             }
+            Node::Spot(_, index) => {
+                let current_event = index
+                    .get()
+                    .ok_or(ScriptingError::EvaluationError("No event set".to_string()))?;
 
+                let current_scenario = self.current_scenario.lock().unwrap().ok_or(
+                    ScriptingError::EvaluationError("No scenario set".to_string()),
+                )?;
+
+                let unlocked_scenarios = self.scenarios.lock().unwrap();
+
+                let value = unlocked_scenarios
+                    .get(current_scenario)
+                    .ok_or(ScriptingError::EvaluationError(
+                        "Scenario not found".to_string(),
+                    ))?
+                    .get(*current_event)
+                    .ok_or(ScriptingError::EvaluationError(
+                        "Event not found".to_string(),
+                    ))?
+                    .fx()?;
+
+                self.digit_stack.lock().unwrap().push(value);
+                Ok(())
+            }
+            Node::Pays(_, index) => {
+                let numerarie_id = index
+                    .get()
+                    .ok_or(ScriptingError::EvaluationError("No event set".to_string()))?;
+
+                let current_scenario = self.current_scenario.lock().unwrap().ok_or(
+                    ScriptingError::EvaluationError("No scenario set".to_string()),
+                )?;
+
+                let unlocked_numeraries = self.numeraries.lock().unwrap();
+
+                let numerarie = unlocked_numeraries
+                    .get(current_scenario)
+                    .ok_or(ScriptingError::EvaluationError(
+                        "Scenario not found".to_string(),
+                    ))?
+                    .get(*numerarie_id)
+                    .ok_or(ScriptingError::EvaluationError(
+                        "Numerarie not found".to_string(),
+                    ))?;
+
+                let current_value = self.digit_stack.lock().unwrap().pop().unwrap();
+                self.digit_stack
+                    .lock()
+                    .unwrap()
+                    .push(current_value / numerarie);
+                Ok(())
+            }
             Node::Constant(value) => {
                 self.digit_stack.lock().unwrap().push(*value);
+                Ok(())
+            }
+            Node::String(value) => {
+                self.string_stack.lock().unwrap().push(value.clone());
                 Ok(())
             }
             Node::Add(children) => {
@@ -162,15 +242,16 @@ impl NodeConstVisitor for ExpressionEvaluator {
                             )))
                         }
                         Some(id) => {
-                            // let value = self.digit_stack.lock().unwrap().pop().unwrap();
-                            // self.variables.lock().unwrap()[*id] = value
-
                             let mut variables = self.variables.lock().unwrap();
                             if !self.boolean_stack.lock().unwrap().is_empty() {
                                 // Pop from boolean stack and store the boolean value
                                 let value = self.boolean_stack.lock().unwrap().pop().unwrap();
                                 variables[*id] = Value::Bool(value);
-
+                                Ok(())
+                            } else if !self.string_stack.lock().unwrap().is_empty() {
+                                // Pop from string stack and store the string value
+                                let value = self.string_stack.lock().unwrap().pop().unwrap();
+                                variables[*id] = Value::String(value);
                                 Ok(())
                             } else {
                                 // Pop from digit stack and store the numeric value
@@ -283,7 +364,6 @@ impl NodeConstVisitor for ExpressionEvaluator {
 
                 Ok(())
             }
-
             Node::False => {
                 self.boolean_stack.lock().unwrap().push(false);
 
@@ -371,7 +451,6 @@ impl NodeConstVisitor for ExpressionEvaluator {
 
                 let top = self.digit_stack.lock().unwrap().pop().unwrap();
                 self.digit_stack.lock().unwrap().push(top.exp());
-
                 Ok(())
             }
             Node::If(children, first_else) => {
@@ -410,8 +489,7 @@ impl NodeConstVisitor for ExpressionEvaluator {
 }
 
 #[cfg(test)]
-mod tests {
-
+mod general_tests {
     use super::*;
 
     #[test]
@@ -503,9 +581,12 @@ mod tests {
             variables: Mutex::new(vec![Value::Null]),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
 
         evaluator.const_visit(base).unwrap();
@@ -537,9 +618,12 @@ mod tests {
             variables: Mutex::new(vec![Value::Null, Value::Null, Value::Null]),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
         evaluator.const_visit(base).unwrap();
 
@@ -565,9 +649,12 @@ mod tests {
             variables: Mutex::new(vec![Value::Null]),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
 
         assert!(evaluator.const_visit(base).is_err());
@@ -607,9 +694,12 @@ mod tests {
             variables: Mutex::new(vec![Value::Null, Value::Null, Value::Null]),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
 
         evaluator.const_visit(base).unwrap();
@@ -634,9 +724,12 @@ mod tests {
             variables: Mutex::new(Vec::new()),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
 
         evaluator.const_visit(base).unwrap();
@@ -661,9 +754,12 @@ mod tests {
             variables: Mutex::new(Vec::new()),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
 
         evaluator.const_visit(base).unwrap();
@@ -688,9 +784,12 @@ mod tests {
             variables: Mutex::new(Vec::new()),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
 
         evaluator.const_visit(base).unwrap();
@@ -715,9 +814,12 @@ mod tests {
             variables: Mutex::new(Vec::new()),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
 
         evaluator.const_visit(base).unwrap();
@@ -742,9 +844,12 @@ mod tests {
             variables: Mutex::new(Vec::new()),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
 
         evaluator.const_visit(base).unwrap();
@@ -779,9 +884,12 @@ mod tests {
             variables: Mutex::new(Vec::new()),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
 
         evaluator.const_visit(base).unwrap();
@@ -816,9 +924,12 @@ mod tests {
             variables: Mutex::new(Vec::new()),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
 
         evaluator.const_visit(base).unwrap();
@@ -847,9 +958,12 @@ mod tests {
             variables: Mutex::new(Vec::new()),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
         evaluator.const_visit(base).unwrap();
         assert_eq!(evaluator.boolean_stack().pop().unwrap(), false);
@@ -891,9 +1005,12 @@ mod tests {
             variables: Mutex::new(vec![Value::Null]),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
 
         evaluator.const_visit(base).unwrap();
@@ -930,9 +1047,12 @@ mod tests {
             variables: Mutex::new(vec![Value::Null, Value::Null, Value::Null]),
             digit_stack: Mutex::new(Vec::new()),
             boolean_stack: Mutex::new(Vec::new()),
+            string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            current_event: None,
+            current_scenario: Mutex::new(None),
+            scenarios: Mutex::new(Vec::new()),
+            numeraries: Mutex::new(Vec::new()),
         };
         evaluator.const_visit(base).unwrap();
 
@@ -943,7 +1063,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod script_tests {
+mod script_evaluation_tests {
     use crate::{
         nodes::{
             expressionevaluator::Value,
@@ -956,35 +1076,37 @@ mod script_tests {
     use super::ExpressionEvaluator;
 
     #[test]
-    fn test_simple_adding_script() {
+    fn test_simple_addition() {
         let script = "
             x = 1;
             y = 2;
             z = x + y;
-            "
+        "
         .to_string();
 
         let tokens = Lexer::new(script).tokenize().unwrap();
         let nodes = Parser::new(tokens).parse().unwrap();
 
         let indexer = ExpressionIndexer::new();
-        indexer.visit(&nodes);
+        indexer.visit(&nodes).unwrap();
 
-        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_size());
+        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
         evaluator.const_visit(nodes).unwrap();
 
         assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(1.0));
+        assert_eq!(*evaluator.variables().get(1).unwrap(), Value::Number(2.0));
+        assert_eq!(*evaluator.variables().get(2).unwrap(), Value::Number(3.0));
     }
 
     #[test]
-    fn test_if_script() {
+    fn test_simple_if_condition() {
         let script = "
             x = 2;
             y = 2;
             z = x + y;
-            if x == 1 then
+            if x == 1 {
                 z = 3;
-            end
+            }
         "
         .to_string();
 
@@ -992,9 +1114,9 @@ mod script_tests {
         let nodes = Parser::new(tokens).parse().unwrap();
 
         let indexer = ExpressionIndexer::new();
-        indexer.visit(&nodes);
+        indexer.visit(&nodes).unwrap();
 
-        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_size());
+        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
         evaluator.const_visit(nodes).unwrap();
 
         assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(2.0));
@@ -1003,16 +1125,16 @@ mod script_tests {
     }
 
     #[test]
-    fn test_nested_if_script() {
+    fn test_if_else_condition() {
         let script = "
             x = 2;
             y = 2;
             z = x + y;
-            if x == 1 then
+            if x == 1 {
                 z = 3;
-            else
+            } else {
                 z = 4;
-            end
+            }
         "
         .to_string();
 
@@ -1020,9 +1142,9 @@ mod script_tests {
         let nodes = Parser::new(tokens).parse().unwrap();
 
         let indexer = ExpressionIndexer::new();
-        indexer.visit(&nodes);
+        indexer.visit(&nodes).unwrap();
 
-        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_size());
+        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
         evaluator.const_visit(nodes).unwrap();
 
         assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(2.0));
@@ -1031,20 +1153,20 @@ mod script_tests {
     }
 
     #[test]
-    fn test_nested_if_else_script() {
+    fn test_nested_if_else_conditions() {
         let script = "
             x = 2;
             y = 2;
             z = x + y;
-            if x == 1 then
+            if x == 1 {
                 z = 3;
-            else
-                if y == 1 then
+            } else {
+                if y == 1 {
                     z = 4;
-                else
+                } else {
                     z = 5;
-                end
-            end
+                }
+            }
         "
         .to_string();
 
@@ -1052,9 +1174,9 @@ mod script_tests {
         let nodes = Parser::new(tokens).parse().unwrap();
 
         let indexer = ExpressionIndexer::new();
-        indexer.visit(&nodes);
+        indexer.visit(&nodes).unwrap();
 
-        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_size());
+        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
         evaluator.const_visit(nodes).unwrap();
 
         assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(2.0));
@@ -1063,15 +1185,15 @@ mod script_tests {
     }
 
     #[test]
-    fn test_new_variable_in_if_script() {
+    fn test_new_variable_in_if_condition() {
         let script = "
             x = 2;
             y = 2;
             z = x + y;
-            if x == 1 then
+            if x == 1 {
                 z = 3;
                 w = 4;
-            end
+            }
         "
         .to_string();
 
@@ -1079,9 +1201,9 @@ mod script_tests {
         let nodes = Parser::new(tokens).parse().unwrap();
 
         let indexer = ExpressionIndexer::new();
-        indexer.visit(&nodes);
+        indexer.visit(&nodes).unwrap();
 
-        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_size());
+        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
         evaluator.const_visit(nodes).unwrap();
 
         assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(2.0));
@@ -1093,10 +1215,10 @@ mod script_tests {
             x = 2;
             y = 2;
             z = x + y;
-            if x == 2 then
+            if x == 2 {
                 z = 3;
                 w = 4;
-            end
+            }
         "
         .to_string();
 
@@ -1104,9 +1226,9 @@ mod script_tests {
         let nodes = Parser::new(tokens).parse().unwrap();
 
         let indexer = ExpressionIndexer::new();
-        indexer.visit(&nodes);
+        indexer.visit(&nodes).unwrap();
 
-        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_size());
+        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
         evaluator.const_visit(nodes).unwrap();
 
         assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(2.0));
@@ -1116,20 +1238,19 @@ mod script_tests {
     }
 
     #[test]
-    fn test_nested_if_else_script_2() {
+    fn test_nested_if_else_conditions_2() {
         let script = "
             x = 2;
             y = 2;
             z = x + y;
-            if x == 1 then
+            if x == 1 {
                 z = 3;
-            else
-                if y == 1 then
-                    z = 4;
-                else
-                    z = 5;
-                end
-            end
+            }
+            if y == 1 {
+                z = 4;
+            } else {
+                z = 5;
+            }
         "
         .to_string();
 
@@ -1137,13 +1258,138 @@ mod script_tests {
         let nodes = Parser::new(tokens).parse().unwrap();
 
         let indexer = ExpressionIndexer::new();
-        indexer.visit(&nodes);
+        indexer.visit(&nodes).unwrap();
 
-        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_size());
+        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
         evaluator.const_visit(nodes).unwrap();
 
         assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(2.0));
         assert_eq!(*evaluator.variables().get(1).unwrap(), Value::Number(2.0));
         assert_eq!(*evaluator.variables().get(2).unwrap(), Value::Number(5.0));
+    }
+
+    #[test]
+    fn test_string_assignment() {
+        let script = "
+            x = \"Hello world\";
+        "
+        .to_string();
+
+        let tokens = Lexer::new(script).tokenize().unwrap();
+        let nodes = Parser::new(tokens).parse().unwrap();
+
+        let indexer = ExpressionIndexer::new();
+        indexer.visit(&nodes).unwrap();
+
+        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
+        evaluator.const_visit(nodes).unwrap();
+
+        assert_eq!(
+            *evaluator.variables().get(0).unwrap(),
+            Value::String("Hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn test_variable_reassignment() {
+        let script = "
+            x = 1;
+            x = \"String\";
+        "
+        .to_string();
+
+        let tokens = Lexer::new(script).tokenize().unwrap();
+        let nodes = Parser::new(tokens).parse().unwrap();
+
+        let indexer = ExpressionIndexer::new();
+        indexer.visit(&nodes).unwrap();
+
+        let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
+        evaluator.const_visit(nodes).unwrap();
+
+        assert_eq!(
+            *evaluator.variables().get(0).unwrap(),
+            Value::String("String".to_string())
+        );
+    }
+
+    // #[test]
+    // fn test_while_loop() {
+    //     let script = "
+    //         x = 0;
+    //         while x < 5 {
+    //             x = x + 1;
+    //         }
+    //     "
+    //     .to_string();
+
+    //     let tokens = Lexer::new(script).tokenize().unwrap();
+    //     let nodes = Parser::new(tokens).parse().unwrap();
+
+    //     let indexer = ExpressionIndexer::new();
+    //     indexer.visit(&nodes).unwrap();;
+
+    //     let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
+    //     evaluator.const_visit(nodes).unwrap();
+
+    //     assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(5.0));
+    // }
+
+    // #[test]
+    // fn test_for_loop() {
+    //     let script = "
+    //         sum = 0;
+    //         for i = 1; i <= 5; i = i + 1 {
+    //             sum = sum + i;
+    //         }
+    //     "
+    //     .to_string();
+
+    //     let tokens = Lexer::new(script).tokenize().unwrap();
+    //     let nodes = Parser::new(tokens).parse().unwrap();
+
+    //     let indexer = ExpressionIndexer::new();
+    //     indexer.visit(&nodes).unwrap();;
+
+    //     let evaluator = ExpressionEvaluator::new().with_variables(indexer.get_variables_size());
+    //     evaluator.const_visit(nodes).unwrap();
+
+    //     assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(15.0));
+    // }
+}
+
+#[cfg(test)]
+mod market_related_tests {
+    use rustatlas::{core::meta::MarketData, time::date::Date};
+
+    use crate::{
+        parsers::{lexer::Lexer, parser::Parser},
+        ExpressionEvaluator, ExpressionIndexer, NodeConstVisitor, NodeVisitor, Value,
+    };
+
+    #[test]
+    fn test_spot_retrival() {
+        let script = "
+            x = spot(\"USD\");            
+        "
+        .to_string();
+
+        let tokens = Lexer::new(script).tokenize().unwrap();
+        let nodes = Parser::new(tokens).parse().unwrap();
+
+        let indexer = ExpressionIndexer::new();
+        indexer.visit(&nodes).unwrap();
+
+        let market_data = MarketData::new(0, Date::empty(), None, None, Some(1.0));
+        let scenarios = vec![vec![market_data]];
+
+        let evaluator = ExpressionEvaluator::new()
+            .with_variables(indexer.get_variables_size())
+            .with_scenarios(scenarios)
+            .with_current_scenario(0);
+
+        evaluator.const_visit(nodes).unwrap();
+
+        assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(1.0));
     }
 }
