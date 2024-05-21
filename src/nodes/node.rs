@@ -4,52 +4,52 @@ use rustatlas::prelude::*;
 
 use super::traits::{ConstVisitable, NodeConstVisitor, NodeVisitor, Visitable};
 
-pub type ExpressionTree = Box<Node>;
+pub type ExprTree = Box<Node>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
-    Base(Vec<ExpressionTree>),
+    Base(Vec<ExprTree>),
 
     // variables
-    Variable(Vec<ExpressionTree>, String, OnceLock<usize>),
+    Variable(Vec<ExprTree>, String, OnceLock<usize>),
     Constant(f64),
     String(String),
 
     // financial
     Spot(Currency, OnceLock<usize>),
-    Pays(Vec<ExpressionTree>, OnceLock<usize>),
+    Pays(Vec<ExprTree>, OnceLock<usize>),
 
     // math
-    Add(Vec<ExpressionTree>),
-    Subtract(Vec<ExpressionTree>),
-    Multiply(Vec<ExpressionTree>),
-    Divide(Vec<ExpressionTree>),
-    Assign(Vec<ExpressionTree>),
-    Min(Vec<ExpressionTree>),
-    Max(Vec<ExpressionTree>),
-    Exp(Vec<ExpressionTree>),
-    Pow(Vec<ExpressionTree>),
-    Ln(Vec<ExpressionTree>),
+    Add(Vec<ExprTree>),
+    Subtract(Vec<ExprTree>),
+    Multiply(Vec<ExprTree>),
+    Divide(Vec<ExprTree>),
+    Assign(Vec<ExprTree>),
+    Min(Vec<ExprTree>),
+    Max(Vec<ExprTree>),
+    Exp(Vec<ExprTree>),
+    Pow(Vec<ExprTree>),
+    Ln(Vec<ExprTree>),
 
     // unary
-    UnaryPlus(Vec<ExpressionTree>),
-    UnaryMinus(Vec<ExpressionTree>),
+    UnaryPlus(Vec<ExprTree>),
+    UnaryMinus(Vec<ExprTree>),
 
     // logic
     True,
     False,
-    Equal(Vec<ExpressionTree>),
-    NotEqual(Vec<ExpressionTree>),
-    And(Vec<ExpressionTree>),
-    Or(Vec<ExpressionTree>),
-    Not(Vec<ExpressionTree>),
-    Superior(Vec<ExpressionTree>),
-    Inferior(Vec<ExpressionTree>),
-    SuperiorOrEqual(Vec<ExpressionTree>),
-    InferiorOrEqual(Vec<ExpressionTree>),
+    Equal(Vec<ExprTree>),
+    NotEqual(Vec<ExprTree>),
+    And(Vec<ExprTree>),
+    Or(Vec<ExprTree>),
+    Not(Vec<ExprTree>),
+    Superior(Vec<ExprTree>),
+    Inferior(Vec<ExprTree>),
+    SuperiorOrEqual(Vec<ExprTree>),
+    InferiorOrEqual(Vec<ExprTree>),
 
     // control flow
-    If(Vec<ExpressionTree>, Option<usize>),
+    If(Vec<ExprTree>, Option<usize>),
 }
 
 impl Node {
@@ -169,7 +169,7 @@ impl Node {
         Node::Pays(Vec::new(), OnceLock::new())
     }
 
-    pub fn add_child(&mut self, child: ExpressionTree) {
+    pub fn add_child(&mut self, child: ExprTree) {
         match self {
             Node::Base(children) => children.push(child),
             Node::Add(children) => children.push(child),
@@ -204,7 +204,7 @@ impl Node {
         }
     }
 
-    pub fn children(&self) -> &Vec<ExpressionTree> {
+    pub fn children(&self) -> &Vec<ExprTree> {
         match self {
             Node::Base(children) => children,
             Node::Add(children) => children,

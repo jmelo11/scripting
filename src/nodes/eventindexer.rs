@@ -2,17 +2,17 @@ use std::{collections::HashMap, sync::Mutex};
 
 use rustatlas::prelude::*;
 
-use super::{node::Node, traits::NodeVisitor};
+use super::{event::Event, node::Node, traits::NodeVisitor};
 
-pub struct ExpressionIndexer {
+pub struct EventIndexer {
     variables: Mutex<HashMap<String, usize>>,
     market_requests: Mutex<Vec<MarketRequest>>,
     numerarie_requests: Mutex<Vec<NumerarieRequest>>,
-    reference_date: Option<Date>,
+    event_date: Option<Date>,
     local_currency: Option<Currency>,
 }
 
-impl NodeVisitor for ExpressionIndexer {
+impl NodeVisitor for EventIndexer {
     type Output = Result<()>;
     fn visit(&self, node: &Box<Node>) -> Self::Output {
         match node.as_ref() {
@@ -73,7 +73,7 @@ impl NodeVisitor for ExpressionIndexer {
                         let exchange_request = ExchangeRateRequest::new(
                             *currency,
                             self.local_currency,
-                            self.reference_date,
+                            self.event_date,
                         );
                         let request = MarketRequest::new(size, None, None, Some(exchange_request));
                         self.market_requests.lock().unwrap().push(request.clone());
@@ -87,7 +87,7 @@ impl NodeVisitor for ExpressionIndexer {
                 None => {
                     let size = self.numerarie_requests.lock().unwrap().len();
                     let request = NumerarieRequest::new(
-                        self.reference_date
+                        self.event_date
                             .ok_or(AtlasError::ValueNotSetErr("Reference date".to_string()))?,
                     );
                     self.numerarie_requests
@@ -103,19 +103,19 @@ impl NodeVisitor for ExpressionIndexer {
     }
 }
 
-impl ExpressionIndexer {
-    pub fn new() -> ExpressionIndexer {
-        ExpressionIndexer {
+impl EventIndexer {
+    pub fn new() -> EventIndexer {
+        EventIndexer {
             variables: Mutex::new(HashMap::new()),
             market_requests: Mutex::new(Vec::new()),
             numerarie_requests: Mutex::new(Vec::new()),
-            reference_date: None,
+            event_date: None,
             local_currency: None,
         }
     }
 
-    pub fn with_reference_date(mut self, date: Date) -> Self {
-        self.reference_date = Some(date);
+    pub fn with_event_date(mut self, date: Date) -> Self {
+        self.event_date = Some(date);
         self
     }
 
@@ -152,6 +152,10 @@ impl ExpressionIndexer {
     pub fn get_market_requests(&self) -> Vec<MarketRequest> {
         self.market_requests.lock().unwrap().clone()
     }
+
+    pub fn visit_event(&self, event: &Event) -> Result<()> {
+        self.visit(&event.expr())
+    }
 }
 
 #[cfg(test)]
@@ -163,7 +167,7 @@ mod tests {
 
     #[test]
     fn test_expression_indexer() {
-        let indexer = ExpressionIndexer::new();
+        let indexer = EventIndexer::new();
         let node = Box::new(Node::new_variable("x".to_string()));
         indexer.visit(&node).unwrap();
         let variables = indexer.variables.lock().unwrap();
@@ -173,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_expression_indexer_multiple() {
-        let indexer = ExpressionIndexer::new();
+        let indexer = EventIndexer::new();
         let node = Box::new(Node::new_variable("x".to_string()));
         indexer.visit(&node).unwrap();
         let node = Box::new(Node::new_variable("y".to_string()));
@@ -185,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_spot_indexer() {
-        let indexer = ExpressionIndexer::new();
+        let indexer = EventIndexer::new();
         let node = Box::new(Node::Spot(Currency::USD, OnceLock::new()));
         indexer.visit(&node).unwrap();
         let market_requests = indexer.market_requests.lock().unwrap();
@@ -200,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_spot_indexer_multiple() {
-        let indexer = ExpressionIndexer::new();
+        let indexer = EventIndexer::new();
         let node = Box::new(Node::Spot(Currency::USD, OnceLock::new()));
         indexer.visit(&node).unwrap();
         let node = Box::new(Node::Spot(Currency::EUR, OnceLock::new()));
@@ -223,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_pays_indexer() {
-        let indexer = ExpressionIndexer::new().with_reference_date(Date::empty());
+        let indexer = EventIndexer::new().with_event_date(Date::empty());
         let node = Box::new(Node::new_pays());
         indexer.visit(&node).unwrap();
         let numerarie_requests = indexer.numerarie_requests.lock().unwrap();
