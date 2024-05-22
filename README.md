@@ -51,10 +51,10 @@ The following methods are available in the scripting language:
 
 The following keywords are available in the scripting language:
 
+- `pays`: Indicates that the following value is a payment. Under the hood, it will be treated as a discounted value.
 - `authorize`: Request approval for a transaction.
 - `finalize`: Flips the script's state if the scope is executed successfully.
 - `execute`: Execute a transaction.
-- `pays`: Indicates that the following value is a payment. Under the hood, it will be treated as a discounted value.
 - `decide`: Execute a decision-making process.
 
 ### `authorize`

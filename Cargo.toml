@@ -7,3 +7,4 @@ edition = "2021"
 clap = "4.5.4"
 thiserror = "1.0"
 rustatlas = { path = "../libs/rustatlas"}
+rayon = "1.10.0"

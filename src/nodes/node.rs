@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use rustatlas::prelude::*;
 
-use super::traits::{ConstVisitable, NodeConstVisitor, NodeVisitor, Visitable};
+use crate::prelude::*;
 
 pub type ExprTree = Box<Node>;
 
@@ -251,5 +251,294 @@ impl ConstVisitable for Box<Node> {
     type Output = ();
     fn const_accept(&self, visitor: &impl NodeConstVisitor) {
         visitor.const_visit(self.clone());
+    }
+}
+
+#[cfg(test)]
+mod ai_gen_tests {
+    use super::*;
+
+    #[test]
+    fn test_new_base() {
+        // Test the creation of a new base node
+        let node = Node::new_base();
+        assert_eq!(node, Node::Base(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_add() {
+        // Test the creation of a new add node
+        let node = Node::new_add();
+        assert_eq!(node, Node::Add(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_subtract() {
+        // Test the creation of a new subtract node
+        let node = Node::new_subtract();
+        assert_eq!(node, Node::Subtract(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_multiply() {
+        // Test the creation of a new multiply node
+        let node = Node::new_multiply();
+        assert_eq!(node, Node::Multiply(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_divide() {
+        // Test the creation of a new divide node
+        let node = Node::new_divide();
+        assert_eq!(node, Node::Divide(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_variable() {
+        // Test the creation of a new variable node
+        let node = Node::new_variable("x".to_string());
+        assert_eq!(
+            node,
+            Node::Variable(Vec::new(), "x".to_string(), OnceLock::new())
+        );
+    }
+
+    #[test]
+    fn test_new_variable_with_id() {
+        // Test the creation of a new variable node with an id
+        let node = Node::new_variable_with_id("x".to_string(), 42);
+        assert_eq!(node, Node::Variable(Vec::new(), "x".to_string(), 42.into()));
+    }
+
+    #[test]
+    fn test_new_min() {
+        // Test the creation of a new min node
+        let node = Node::new_min();
+        assert_eq!(node, Node::Min(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_max() {
+        // Test the creation of a new max node
+        let node = Node::new_max();
+        assert_eq!(node, Node::Max(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_exp() {
+        // Test the creation of a new exp node
+        let node = Node::new_exp();
+        assert_eq!(node, Node::Exp(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_ln() {
+        // Test the creation of a new ln node
+        let node = Node::new_ln();
+        assert_eq!(node, Node::Ln(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_pow() {
+        // Test the creation of a new pow node
+        let node = Node::new_pow();
+        assert_eq!(node, Node::Pow(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_constant() {
+        // Test the creation of a new constant node
+        let node = Node::new_constant(3.14);
+        assert_eq!(node, Node::Constant(3.14));
+    }
+
+    #[test]
+    fn test_new_assign() {
+        // Test the creation of a new assign node
+        let node = Node::new_assign();
+        assert_eq!(node, Node::Assign(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_and() {
+        // Test the creation of a new and node
+        let node = Node::new_and();
+        assert_eq!(node, Node::And(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_or() {
+        // Test the creation of a new or node
+        let node = Node::new_or();
+        assert_eq!(node, Node::Or(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_not() {
+        // Test the creation of a new not node
+        let node = Node::new_not();
+        assert_eq!(node, Node::Not(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_superior() {
+        // Test the creation of a new superior node
+        let node = Node::new_superior();
+        assert_eq!(node, Node::Superior(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_inferior() {
+        // Test the creation of a new inferior node
+        let node = Node::new_inferior();
+        assert_eq!(node, Node::Inferior(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_superior_or_equal() {
+        // Test the creation of a new superior or equal node
+        let node = Node::new_superior_or_equal();
+        assert_eq!(node, Node::SuperiorOrEqual(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_equal() {
+        // Test the creation of a new equal node
+        let node = Node::new_equal();
+        assert_eq!(node, Node::Equal(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_if() {
+        // Test the creation of a new if node
+        let node = Node::new_if();
+        assert_eq!(node, Node::If(Vec::new(), None));
+    }
+
+    #[test]
+    fn test_new_unary_plus() {
+        // Test the creation of a new unary plus node
+        let node = Node::new_unary_plus();
+        assert_eq!(node, Node::UnaryPlus(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_unary_minus() {
+        // Test the creation of a new unary minus node
+        let node = Node::new_unary_minus();
+        assert_eq!(node, Node::UnaryMinus(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_inferior_or_equal() {
+        // Test the creation of a new inferior or equal node
+        let node = Node::new_inferior_or_equal();
+        assert_eq!(node, Node::InferiorOrEqual(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_not_equal() {
+        // Test the creation of a new not equal node
+        let node = Node::new_not_equal();
+        assert_eq!(node, Node::NotEqual(Vec::new()));
+    }
+
+    #[test]
+    fn test_new_true() {
+        // Test the creation of a new true node
+        let node = Node::new_true();
+        assert_eq!(node, Node::True);
+    }
+
+    #[test]
+    fn test_new_false() {
+        // Test the creation of a new false node
+        let node = Node::new_false();
+        assert_eq!(node, Node::False);
+    }
+
+    #[test]
+    fn test_new_pays() {
+        // Test the creation of a new pays node
+        let node = Node::new_pays();
+        assert_eq!(node, Node::Pays(Vec::new(), OnceLock::new()));
+    }
+
+    #[test]
+    fn test_add_child_to_base() {
+        // Test adding a child to a base node
+        let mut node = Node::new_base();
+        let child = Box::new(Node::new_add());
+        node.add_child(child.clone());
+        assert_eq!(node.children(), &vec![child]);
+    }
+
+    #[test]
+    fn test_add_child_to_add() {
+        // Test adding a child to an add node
+        let mut node = Node::new_add();
+        let child = Box::new(Node::new_subtract());
+        node.add_child(child.clone());
+        assert_eq!(node.children(), &vec![child]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot add child to spot node")]
+    fn test_add_child_to_spot() {
+        // Test adding a child to a spot node, which should panic
+        let mut node = Node::Spot(Currency::USD, OnceLock::new());
+        let child = Box::new(Node::new_add());
+        node.add_child(child);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot add child to true node")]
+    fn test_add_child_to_true() {
+        // Test adding a child to a true node, which should panic
+        let mut node = Node::True;
+        let child = Box::new(Node::new_add());
+        node.add_child(child);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot add child to constant node")]
+    fn test_add_child_to_constant() {
+        // Test adding a child to a constant node, which should panic
+        let mut node = Node::Constant(3.14);
+        let child = Box::new(Node::new_add());
+        node.add_child(child);
+    }
+
+    #[test]
+    fn test_children_of_base() {
+        // Test getting children of a base node
+        let mut node = Node::new_base();
+        let child = Box::new(Node::new_add());
+        node.add_child(child.clone());
+        assert_eq!(node.children(), &vec![child]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot get children from spot node")]
+    fn test_children_of_spot() {
+        // Test getting children of a spot node, which should panic
+        let node = Node::Spot(Currency::USD, OnceLock::new());
+        node.children();
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot get children from true node")]
+    fn test_children_of_true() {
+        // Test getting children of a true node, which should panic
+        let node = Node::True;
+        node.children();
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot get children from constant node")]
+    fn test_children_of_constant() {
+        // Test getting children of a constant node, which should panic
+        let node = Node::Constant(3.14);
+        node.children();
     }
 }

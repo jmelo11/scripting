@@ -1,4 +1,4 @@
-use super::node::Node;
+use crate::prelude::*;
 
 pub trait NodeVisitor {
     type Output;

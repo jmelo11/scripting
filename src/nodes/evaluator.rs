@@ -1,13 +1,18 @@
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rustatlas::prelude::*;
-use std::sync::Mutex;
 
-use super::{
-    node::Node,
-    traits::{ConstVisitable, NodeConstVisitor},
+use std::{
+    ops::{Add, AddAssign, Div, Mul, Sub, SubAssign},
+    sync::Mutex,
 };
 
+use crate::prelude::*;
 use crate::utils::errors::{Result, ScriptingError};
 
+/// # Value
+/// Enum representing the possible values of a variable
+/// in the scripting language. We could say that this language
+/// is dynamically typed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Bool(bool),
@@ -16,10 +21,75 @@ pub enum Value {
     Null,
 }
 
+impl Add for Value {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => Value::Number(a + b),
+            (Value::String(a), Value::String(b)) => Value::String(a + &b),
+            _ => Value::Null,
+        }
+    }
+}
+
+impl AddAssign for Value {
+    fn add_assign(&mut self, other: Self) {
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => *a += b,
+            (Value::String(a), Value::String(b)) => *a += &b,
+            _ => (),
+        }
+    }
+}
+
+impl Sub for Value {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self {
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => Value::Number(a - b),
+            _ => Value::Null,
+        }
+    }
+}
+
+impl SubAssign for Value {
+    fn sub_assign(&mut self, other: Self) {
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => *a -= b,
+            _ => (),
+        }
+    }
+}
+
+impl Mul for Value {
+    type Output = Self;
+
+    fn mul(self, other: Self) -> Self {
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => Value::Number(a * b),
+            _ => Value::Null,
+        }
+    }
+}
+
+impl Div for Value {
+    type Output = Self;
+
+    fn div(self, other: Self) -> Self {
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => Value::Number(a / b),
+            _ => Value::Null,
+        }
+    }
+}
+
 pub type Scenario = Vec<MarketData>;
 pub type Numeraries = Vec<f64>;
 
-#[allow(unused)]
+/// # ExprEvaluator
+/// Visitor that evaluates the expression tree
 pub struct ExprEvaluator<'a> {
     variables: Mutex<Vec<Value>>,
     digit_stack: Mutex<Vec<f64>>,
@@ -28,8 +98,7 @@ pub struct ExprEvaluator<'a> {
     is_lhs_variable: Mutex<bool>,
     lhs_variable: Mutex<Option<Box<Node>>>,
 
-    scenario: Mutex<Option<&'a Scenario>>,
-    numeraries: Mutex<Option<&'a Numeraries>>,
+    scenario: Option<&'a Scenario>,
 }
 
 impl<'a> ExprEvaluator<'a> {
@@ -41,18 +110,12 @@ impl<'a> ExprEvaluator<'a> {
             string_stack: Mutex::new(Vec::new()),
             is_lhs_variable: Mutex::new(false),
             lhs_variable: Mutex::new(None),
-            scenario: Mutex::new(None),
-            numeraries: Mutex::new(None),
+            scenario: None,
         }
     }
 
-    pub fn with_scenario(self, scenario: &'a Scenario) -> Self {
-        *self.scenario.lock().unwrap() = Some(scenario);
-        self
-    }
-
-    pub fn with_numeraries(self, numeraries: &'a Numeraries) -> Self {
-        *self.numeraries.lock().unwrap() = Some(numeraries);
+    pub fn with_scenario(mut self, scenario: &'a Scenario) -> Self {
+        self.scenario = Some(scenario);
         self
     }
 
@@ -122,20 +185,17 @@ impl<'a> NodeConstVisitor for ExprEvaluator<'a> {
                     "Spot not indexed".to_string(),
                 ))?;
 
-                let value = self
+                let market_data = self
                     .scenario
-                    .lock()
-                    .unwrap()
                     .ok_or(ScriptingError::EvaluationError(
                         "No scenario set".to_string(),
                     ))?
                     .get(*id)
                     .ok_or(ScriptingError::EvaluationError(
                         "Spot not found".to_string(),
-                    ))?
-                    .fx()?;
+                    ))?;
 
-                self.digit_stack.lock().unwrap().push(value);
+                self.digit_stack.lock().unwrap().push(market_data.fx()?);
                 Ok(())
             }
             Node::Pays(_, index) => {
@@ -143,10 +203,8 @@ impl<'a> NodeConstVisitor for ExprEvaluator<'a> {
                     .get()
                     .ok_or(ScriptingError::EvaluationError("No event set".to_string()))?;
 
-                let value = self
-                    .numeraries
-                    .lock()
-                    .unwrap()
+                let market_data = self
+                    .scenario
                     .ok_or(ScriptingError::EvaluationError(
                         "No scenario set".to_string(),
                     ))?
@@ -157,7 +215,10 @@ impl<'a> NodeConstVisitor for ExprEvaluator<'a> {
                     .clone();
 
                 let current_value = self.digit_stack.lock().unwrap().pop().unwrap();
-                self.digit_stack.lock().unwrap().push(current_value / value);
+                self.digit_stack
+                    .lock()
+                    .unwrap()
+                    .push(current_value / market_data.numerarie());
                 Ok(())
             }
             Node::Constant(value) => {
@@ -469,6 +530,66 @@ impl<'a> NodeConstVisitor for ExprEvaluator<'a> {
             }
         };
         eval
+    }
+}
+
+pub struct EventStreamEvaluator<'a> {
+    n_vars: usize,
+    scenarios: Option<&'a Vec<Scenario>>,
+}
+
+impl<'a> EventStreamEvaluator<'a> {
+    pub fn new(n_vars: usize) -> Self {
+        EventStreamEvaluator {
+            n_vars,
+            scenarios: None,
+        }
+    }
+
+    pub fn with_scenarios(mut self, scenarios: &'a Vec<Scenario>) -> Self {
+        self.scenarios = Some(scenarios);
+        self
+    }
+
+    pub fn evaluate(&self, event_stream: EventStream) -> Result<Vec<Value>> {
+        let variables = Mutex::new(vec![Value::Null; self.n_vars]);
+        let scenarios = self.scenarios.ok_or(ScriptingError::EvaluationError(
+            "No scenarios set".to_string(),
+        ))?;
+
+        scenarios
+            .par_iter()
+            .try_for_each(|scenario| -> Result<()> {
+                let evaluator = ExprEvaluator::new()
+                    .with_variables(self.n_vars)
+                    .with_scenario(scenario);
+
+                event_stream
+                    .events()
+                    .iter()
+                    .try_for_each(|event| -> Result<()> {
+                        evaluator.const_visit(event.expr().clone())?;
+                        Ok(())
+                    })?;
+
+                let evaluated_variables = evaluator.variables();
+                let mut vars = variables.lock().unwrap();
+                vars.iter_mut().enumerate().for_each(|(j, val)| {
+                    let tmp = evaluated_variables.get(j).unwrap();
+                    *val += tmp.clone();
+                });
+                Ok(())
+            })?;
+
+        //avg
+        let mut vars = variables.lock().unwrap();
+        let len = scenarios.len() as f64;
+        vars.iter_mut().for_each(|v| match v {
+            Value::Number(v) => *v /= len,
+            _ => (),
+        });
+
+        Ok(vars.clone())
     }
 }
 
@@ -891,8 +1012,8 @@ mod general_tests {
 mod script_evaluation_tests {
     use crate::{
         nodes::{
-            exprevaluator::Value,
-            eventindexer::EventIndexer,
+            evaluator::Value,
+            indexer::EventIndexer,
             traits::{NodeConstVisitor, NodeVisitor},
         },
         parsers::{lexer::Lexer, parser::Parser},
@@ -1137,83 +1258,363 @@ mod script_evaluation_tests {
             Value::String("String".to_string())
         );
     }
-
-    // #[test]
-    // fn test_while_loop() {
-    //     let script = "
-    //         x = 0;
-    //         while x < 5 {
-    //             x = x + 1;
-    //         }
-    //     "
-    //     .to_string();
-
-    //     let tokens = Lexer::new(script).tokenize().unwrap();
-    //     let nodes = Parser::new(tokens).parse().unwrap();
-
-    //     let indexer = EventIndexer::new();
-    //     indexer.visit(&nodes).unwrap();;
-
-    //     let evaluator = ExprEvaluator::new().with_variables(indexer.get_variables_size());
-    //     evaluator.const_visit(nodes).unwrap();
-
-    //     assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(5.0));
-    // }
-
-    // #[test]
-    // fn test_for_loop() {
-    //     let script = "
-    //         sum = 0;
-    //         for i = 1; i <= 5; i = i + 1 {
-    //             sum = sum + i;
-    //         }
-    //     "
-    //     .to_string();
-
-    //     let tokens = Lexer::new(script).tokenize().unwrap();
-    //     let nodes = Parser::new(tokens).parse().unwrap();
-
-    //     let indexer = EventIndexer::new();
-    //     indexer.visit(&nodes).unwrap();;
-
-    //     let evaluator = ExprEvaluator::new().with_variables(indexer.get_variables_size());
-    //     evaluator.const_visit(nodes).unwrap();
-
-    //     assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(15.0));
-    // }
 }
 
 #[cfg(test)]
-mod market_related_tests {
-    use rustatlas::{core::meta::MarketData, time::date::Date};
+mod ai_gen_tests {
+    use super::*;
+    #[test]
+    fn test_unary_plus_node() {
+        // Test the UnaryPlus node to ensure it correctly processes the value without changing it.
+        let mut base = Box::new(Node::new_base());
+        let mut unary_plus = Box::new(Node::new_unary_plus());
 
-    use crate::{
-        parsers::{lexer::Lexer, parser::Parser},
-        ExprEvaluator, EventIndexer, NodeConstVisitor, NodeVisitor, Value,
-    };
+        let c1 = Node::new_constant(1.0);
+
+        unary_plus.add_child(Box::new(c1));
+        base.add_child(unary_plus);
+
+        let evaluator = ExprEvaluator::new();
+        evaluator.const_visit(base).unwrap();
+
+        assert_eq!(evaluator.digit_stack().pop().unwrap(), 1.0);
+    }
 
     #[test]
-    fn test_spot_retrival() {
-        let script = "
-            x = spot(\"USD\");            
-        "
-        .to_string();
+    fn test_unary_minus_node() {
+        // Test the UnaryMinus node to ensure it correctly negates the value.
+        let mut base = Box::new(Node::new_base());
+        let mut unary_minus = Box::new(Node::new_unary_minus());
 
-        let tokens = Lexer::new(script).tokenize().unwrap();
-        let nodes = Parser::new(tokens).parse().unwrap();
+        let c1 = Node::new_constant(1.0);
 
-        let indexer = EventIndexer::new();
-        indexer.visit(&nodes).unwrap();
+        unary_minus.add_child(Box::new(c1));
+        base.add_child(unary_minus);
 
-        let market_data = MarketData::new(0, Date::empty(), 1.0, None, Some(1.0), None);
-        let scenarios = vec![market_data];
+        let evaluator = ExprEvaluator::new();
+        evaluator.const_visit(base).unwrap();
 
-        let evaluator = ExprEvaluator::new()
-            .with_variables(indexer.get_variables_size())
-            .with_scenario(&scenarios);
+        assert_eq!(evaluator.digit_stack().pop().unwrap(), -1.0);
+    }
 
-        evaluator.const_visit(nodes).unwrap();
+    #[test]
+    fn test_min_node() {
+        // Test the Min node to ensure it correctly finds the minimum value between two constants.
+        let mut base = Box::new(Node::new_base());
+        let mut min = Box::new(Node::new_min());
 
-        assert_eq!(*evaluator.variables().get(0).unwrap(), Value::Number(1.0));
+        let c1 = Node::new_constant(1.0);
+        let c2 = Node::new_constant(2.0);
+
+        min.add_child(Box::new(c1));
+        min.add_child(Box::new(c2));
+        base.add_child(min);
+
+        let evaluator = ExprEvaluator::new();
+        evaluator.const_visit(base).unwrap();
+
+        assert_eq!(evaluator.digit_stack().pop().unwrap(), 1.0);
+    }
+
+    #[test]
+    fn test_max_node() {
+        // Test the Max node to ensure it correctly finds the maximum value between two constants.
+        let mut base = Box::new(Node::new_base());
+        let mut max = Box::new(Node::new_max());
+
+        let c1 = Node::new_constant(1.0);
+        let c2 = Node::new_constant(2.0);
+
+        max.add_child(Box::new(c1));
+        max.add_child(Box::new(c2));
+        base.add_child(max);
+
+        let evaluator = ExprEvaluator::new();
+        evaluator.const_visit(base).unwrap();
+
+        assert_eq!(evaluator.digit_stack().pop().unwrap(), 2.0);
+    }
+
+    #[test]
+    fn test_pow_node() {
+        // Test the Pow node to ensure it correctly calculates the power of one constant to another.
+        let mut base = Box::new(Node::new_base());
+        let mut pow = Box::new(Node::new_pow());
+
+        let c1 = Node::new_constant(2.0);
+        let c2 = Node::new_constant(3.0);
+
+        pow.add_child(Box::new(c1));
+        pow.add_child(Box::new(c2));
+        base.add_child(pow);
+
+        let evaluator = ExprEvaluator::new();
+        evaluator.const_visit(base).unwrap();
+
+        assert_eq!(evaluator.digit_stack().pop().unwrap(), 8.0);
+    }
+
+    #[test]
+    fn test_ln_node() {
+        // Test the Ln node to ensure it correctly calculates the natural logarithm of a constant.
+        let mut base = Box::new(Node::new_base());
+        let mut ln = Box::new(Node::new_ln());
+
+        let c1 = Node::new_constant(2.718281828459045);
+
+        ln.add_child(Box::new(c1));
+        base.add_child(ln);
+
+        let evaluator = ExprEvaluator::new();
+        evaluator.const_visit(base).unwrap();
+
+        assert!((evaluator.digit_stack().pop().unwrap() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_exp_node() {
+        // Test the Exp node to ensure it correctly calculates the exponential of a constant.
+        let mut base = Box::new(Node::new_base());
+        let mut exp = Box::new(Node::new_exp());
+
+        let c1 = Node::new_constant(1.0);
+
+        exp.add_child(Box::new(c1));
+        base.add_child(exp);
+
+        let evaluator = ExprEvaluator::new();
+        evaluator.const_visit(base).unwrap();
+
+        assert!((evaluator.digit_stack().pop().unwrap() - 2.718281828459045).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_not_equal_node() {
+        // Test the NotEqual node to ensure it correctly evaluates the inequality of two constants.
+        let mut base = Box::new(Node::new_base());
+        let mut not_equal = Box::new(Node::new_not_equal());
+
+        let c1 = Node::new_constant(1.0);
+        let c2 = Node::new_constant(2.0);
+
+        not_equal.add_child(Box::new(c1));
+        not_equal.add_child(Box::new(c2));
+        base.add_child(not_equal);
+
+        let evaluator = ExprEvaluator::new();
+        evaluator.const_visit(base).unwrap();
+
+        assert_eq!(evaluator.boolean_stack().pop().unwrap(), true);
+    }
+
+    #[test]
+    fn test_add_assign_number() {
+        // Test the AddAssign trait for Value::Number to ensure it correctly adds two numbers.
+        let mut a = Value::Number(1.0);
+        let b = Value::Number(2.0);
+        a += b;
+        assert_eq!(a, Value::Number(3.0));
+    }
+
+    #[test]
+    fn test_add_assign_string() {
+        // Test the AddAssign trait for Value::String to ensure it correctly concatenates two strings.
+        let mut a = Value::String("Hello".to_string());
+        let b = Value::String(" World".to_string());
+        a += b;
+        assert_eq!(a, Value::String("Hello World".to_string()));
+    }
+
+    #[test]
+    fn test_sub_assign_number() {
+        // Test the SubAssign trait for Value::Number to ensure it correctly subtracts two numbers.
+        let mut a = Value::Number(3.0);
+        let b = Value::Number(1.0);
+        a -= b;
+        assert_eq!(a, Value::Number(2.0));
+    }
+
+    #[test]
+    fn test_add_number_and_string() {
+        // Test the Add trait for Value to ensure it returns Value::Null when adding a number and a string.
+        let a = Value::Number(1.0);
+        let b = Value::String("Hello".to_string());
+        let result = a + b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_sub_number_and_string() {
+        // Test the Sub trait for Value to ensure it returns Value::Null when subtracting a string from a number.
+        let a = Value::Number(1.0);
+        let b = Value::String("Hello".to_string());
+        let result = a - b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_mul_number_and_string() {
+        // Test the Mul trait for Value to ensure it returns Value::Null when multiplying a number and a string.
+        let a = Value::Number(1.0);
+        let b = Value::String("Hello".to_string());
+        let result = a * b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_div_number_and_string() {
+        // Test the Div trait for Value to ensure it returns Value::Null when dividing a number by a string.
+        let a = Value::Number(1.0);
+        let b = Value::String("Hello".to_string());
+        let result = a / b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_add_bool_and_number() {
+        // Test the Add trait for Value to ensure it returns Value::Null when adding a boolean and a number.
+        let a = Value::Bool(true);
+        let b = Value::Number(1.0);
+        let result = a + b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_sub_bool_and_number() {
+        // Test the Sub trait for Value to ensure it returns Value::Null when subtracting a number from a boolean.
+        let a = Value::Bool(true);
+        let b = Value::Number(1.0);
+        let result = a - b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_mul_bool_and_number() {
+        // Test the Mul trait for Value to ensure it returns Value::Null when multiplying a boolean and a number.
+        let a = Value::Bool(true);
+        let b = Value::Number(1.0);
+        let result = a * b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_div_bool_and_number() {
+        // Test the Div trait for Value to ensure it returns Value::Null when dividing a boolean by a number.
+        let a = Value::Bool(true);
+        let b = Value::Number(1.0);
+        let result = a / b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_add_null_and_number() {
+        // Test the Add trait for Value to ensure it returns Value::Null when adding a null and a number.
+        let a = Value::Null;
+        let b = Value::Number(1.0);
+        let result = a + b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_sub_null_and_number() {
+        // Test the Sub trait for Value to ensure it returns Value::Null when subtracting a number from a null.
+        let a = Value::Null;
+        let b = Value::Number(1.0);
+        let result = a - b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_mul_null_and_number() {
+        // Test the Mul trait for Value to ensure it returns Value::Null when multiplying a null and a number.
+        let a = Value::Null;
+        let b = Value::Number(1.0);
+        let result = a * b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_div_null_and_number() {
+        // Test the Div trait for Value to ensure it returns Value::Null when dividing a null by a number.
+        let a = Value::Null;
+        let b = Value::Number(1.0);
+        let result = a / b;
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_event_stream_evaluator_no_scenarios() {
+        // Test the EventStreamEvaluator to ensure it returns an error when no scenarios are set.
+        let evaluator = EventStreamEvaluator::new(1);
+        let event_stream = EventStream::new();
+        let result = evaluator.evaluate(event_stream);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            ScriptingError::EvaluationError("No scenarios set".to_string()).to_string()
+        );
+    }
+
+    #[test]
+    fn test_expr_evaluator_with_variables() {
+        // Test the ExprEvaluator to ensure it correctly resizes the variables.
+        let evaluator = ExprEvaluator::new().with_variables(3);
+        assert_eq!(evaluator.variables().len(), 3);
+        assert_eq!(
+            evaluator.variables(),
+            vec![Value::Null, Value::Null, Value::Null]
+        );
+    }
+
+    #[test]
+    fn test_expr_evaluator_digit_stack() {
+        // Test the ExprEvaluator to ensure it correctly returns the digit stack.
+        let evaluator = ExprEvaluator::new();
+        evaluator.digit_stack.lock().unwrap().push(1.0);
+        assert_eq!(evaluator.digit_stack(), vec![1.0]);
+    }
+
+    #[test]
+    fn test_expr_evaluator_boolean_stack() {
+        // Test the ExprEvaluator to ensure it correctly returns the boolean stack.
+        let evaluator = ExprEvaluator::new();
+        evaluator.boolean_stack.lock().unwrap().push(true);
+        assert_eq!(evaluator.boolean_stack(), vec![true]);
+    }
+
+    #[test]
+    fn test_expr_evaluator_is_lhs_variable() {
+        // Test the ExprEvaluator to ensure it correctly sets and gets the is_lhs_variable flag.
+        let evaluator = ExprEvaluator::new();
+        *evaluator.is_lhs_variable.lock().unwrap() = true;
+        assert_eq!(*evaluator.is_lhs_variable.lock().unwrap(), true);
+    }
+
+    #[test]
+    fn test_expr_evaluator_lhs_variable() {
+        // Test the ExprEvaluator to ensure it correctly sets and gets the lhs_variable.
+        let evaluator = ExprEvaluator::new();
+        let node = Box::new(Node::new_constant(1.0));
+        *evaluator.lhs_variable.lock().unwrap() = Some(node.clone());
+        assert_eq!(*evaluator.lhs_variable.lock().unwrap(), Some(node));
+    }
+
+    #[test]
+    fn test_expr_evaluator_with_scenario_none() {
+        // Test the ExprEvaluator to ensure it correctly handles None scenario.
+        let evaluator = ExprEvaluator::new();
+        assert!(evaluator.scenario.is_none());
+    }
+
+    #[test]
+    fn test_event_stream_evaluator_with_scenarios() {
+        // Test the EventStreamEvaluator to ensure it correctly evaluates with scenarios set.
+        let scenario: Scenario = vec![];
+        let scenarios = vec![scenario];
+        let evaluator = EventStreamEvaluator::new(1).with_scenarios(&scenarios);
+        let event_stream = EventStream::new();
+        let result = evaluator.evaluate(event_stream);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![Value::Null]);
     }
 }

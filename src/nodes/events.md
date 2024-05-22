@@ -1,6 +1,38 @@
-# Lefi: Code Evaluation
+# Lefi: Event Evaluation
 
-Code evaluation is the process of interpreting and executing code written in a scripting language. The code is parsed into an abstract syntax tree (AST) and then evaluated by traversing the tree and executing the nodes.
+Code evaluation in Lefi is based on the concept of a financial events. An event happens in a specific point in time its is priced according to the market data available at that time. This means that in order to evaluate the script, we will need the relevant market data.
+
+Events contain the following information:
+
+- Event date: The date when the event occurs.
+- Expression Tree: The expression tree that represents the event.
+
+The evaluation process is shown in the following diagram:
+
+```mermaid
+sequenceDiagram
+    participant MA as Main
+    participant P as Parser    
+    participant I as Indexer
+    participant M as Model
+    participant EV as Evaluator    
+
+    MA->>P: Script
+    P-->>MA: Events
+    loop for each event
+        MA->>I: Event
+        I->>I: Index event
+    end
+    I-->>MA: Market Request
+    MA->>M: Market Request
+    M-->>MA: Market Data
+    MA->>EV: Events
+    MA->>EV: Market Data
+    loop for each event        
+        EV->>EV: Evaluate        
+    end
+    EV-->>MA: Results
+```
 
 ## Expression Trees
 

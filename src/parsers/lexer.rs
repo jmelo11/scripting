@@ -1,6 +1,5 @@
+use crate::prelude::*;
 use std::cell::RefCell;
-
-use crate::utils::errors::{Result, ScriptingError};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -38,6 +37,8 @@ pub enum Token {
     EOF,
 }
 
+/// # Lexer
+/// The Lexer struct is used to tokenize the input string.
 pub struct Lexer {
     input: Vec<char>,
     position: RefCell<usize>,
@@ -200,6 +201,23 @@ impl Lexer {
             tokens.push(token);
         }
         Ok(tokens)
+    }
+}
+
+pub trait Tokenize {
+    fn tokenize(&self) -> Result<Vec<Token>>;
+}
+
+impl Tokenize for String {
+    fn tokenize(&self) -> Result<Vec<Token>> {
+        let lexer = Lexer::new(self.clone());
+        lexer.tokenize()
+    }
+}
+
+impl Tokenize for &str {
+    fn tokenize(&self) -> Result<Vec<Token>> {
+        self.to_string().tokenize()
     }
 }
 
