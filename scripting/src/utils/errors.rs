@@ -1,5 +1,6 @@
 use rustatlas::prelude::*;
 use thiserror::Error;
+
 #[derive(Debug, Error)]
 pub enum ScriptingError {
     #[error("Invalid Syntax: {0}")]
@@ -17,3 +18,9 @@ pub enum ScriptingError {
 }
 
 pub type Result<T> = std::result::Result<T, ScriptingError>;
+
+impl From<ScriptingError> for String {
+    fn from(e: ScriptingError) -> Self {
+        e.to_string()
+    }
+}

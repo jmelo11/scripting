@@ -2,24 +2,25 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use rustatlas::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use super::{node::Node, traits::NodeVisitor};
 use crate::prelude::*;
-use crate::utils::errors::Result;
+use crate::utils::errors::{Result, ScriptingError};
 
 /// # CodedEvent
 /// A coded event is a combination of a reference date and a coded expression. Its a precompiled version of an event.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CodedEvent {
     reference_date: Date,
-    code: String,
+    script: String,
 }
 
 impl CodedEvent {
-    pub fn new(reference_date: Date, code: String) -> CodedEvent {
+    pub fn new(reference_date: Date, script: String) -> CodedEvent {
         CodedEvent {
             reference_date,
-            code,
+            script,
         }
     }
 
@@ -27,8 +28,8 @@ impl CodedEvent {
         self.reference_date
     }
 
-    pub fn code(&self) -> &String {
-        &self.code
+    pub fn script(&self) -> &String {
+        &self.script
     }
 }
 
@@ -61,7 +62,7 @@ impl TryFrom<CodedEvent> for Event {
     type Error = ScriptingError;
 
     fn try_from(event: CodedEvent) -> Result<Event> {
-        let expr = ExprTree::try_from(event.code().clone())?;
+        let expr = ExprTree::try_from(event.script().clone())?;
         Ok(Event::new(event.reference_date(), expr))
     }
 }
@@ -86,6 +87,11 @@ impl EventStream {
         self
     }
 
+    pub fn with_events(mut self, events: Vec<Event>) -> Self {
+        self.events = events;
+        self
+    }
+
     pub fn add_event(&mut self, event: Event) {
         self.events.push(event);
     }
@@ -96,6 +102,20 @@ impl EventStream {
 
     pub fn event_dates(&self) -> Vec<Date> {
         self.events.iter().map(|e| e.reference_date).collect()
+    }
+}
+
+impl TryFrom<Vec<CodedEvent>> for EventStream {
+    type Error = ScriptingError;
+
+    fn try_from(events: Vec<CodedEvent>) -> Result<EventStream> {
+        let mut event_stream = EventStream::new();
+        events.iter().try_for_each(|event| -> Result<()> {
+            let event = Event::try_from(event.clone())?;
+            event_stream.add_event(event);
+            Ok(())
+        })?;
+        Ok(event_stream)
     }
 }
 

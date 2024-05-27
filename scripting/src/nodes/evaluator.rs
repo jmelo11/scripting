@@ -1,5 +1,6 @@
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use rustatlas::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use std::{
     ops::{Add, AddAssign, Div, Mul, Sub, SubAssign},
@@ -13,7 +14,7 @@ use crate::utils::errors::{Result, ScriptingError};
 /// Enum representing the possible values of a variable
 /// in the scripting language. We could say that this language
 /// is dynamically typed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Bool(bool),
     Number(f64),
@@ -533,6 +534,8 @@ impl<'a> NodeConstVisitor for ExprEvaluator<'a> {
     }
 }
 
+/// # EventStreamEvaluator
+/// Visitor that evaluates the event stream
 pub struct EventStreamEvaluator<'a> {
     n_vars: usize,
     scenarios: Option<&'a Vec<Scenario>>,
@@ -551,11 +554,40 @@ impl<'a> EventStreamEvaluator<'a> {
         self
     }
 
-    pub fn evaluate(&self, event_stream: EventStream) -> Result<Vec<Value>> {
-        let variables = Mutex::new(vec![Value::Null; self.n_vars]);
-        let scenarios = self.scenarios.ok_or(ScriptingError::EvaluationError(
-            "No scenarios set".to_string(),
-        ))?;
+    pub fn visit_events(&self, event_stream: &EventStream) -> Result<Vec<Value>> {
+        let scenarios = self
+            .scenarios
+            .ok_or(ScriptingError::EvaluationError(
+                "No scenarios set".to_string(),
+            ))
+            .and_then(|scenarios| match scenarios.is_empty() {
+                true => Err(ScriptingError::EvaluationError(
+                    "No scenarios are empty".to_string(),
+                )),
+                false => Ok(scenarios),
+            })?;
+
+        // Evaluate the events to get the variables
+        let evaluator = ExprEvaluator::new().with_variables(self.n_vars);
+        event_stream
+            .events()
+            .iter()
+            .try_for_each(|event| -> Result<()> {
+                evaluator.const_visit(event.expr().clone())?;
+                Ok(())
+            })?;
+
+        let v: Vec<Value> = evaluator
+            .variables()
+            .iter()
+            .map(|v| match v {
+                Value::Number(_) => Value::Number(0.0),
+                _ => v.clone(),
+            })
+            .collect();
+
+            
+        let global_variables = Mutex::new(v);
 
         scenarios
             .par_iter()
@@ -572,17 +604,20 @@ impl<'a> EventStreamEvaluator<'a> {
                         Ok(())
                     })?;
 
-                let evaluated_variables = evaluator.variables();
-                let mut vars = variables.lock().unwrap();
-                vars.iter_mut().enumerate().for_each(|(j, val)| {
-                    let tmp = evaluated_variables.get(j).unwrap();
-                    *val += tmp.clone();
-                });
+                let local_variables = evaluator.variables();
+                let mut vars = global_variables.lock().unwrap();
+                vars.iter_mut()
+                    .zip(local_variables.iter())
+                    .for_each(|(g, l)| match (g, l) {
+                        (Value::Number(g), Value::Number(l)) => *g += l,
+                        _ => (),
+                    });
+
                 Ok(())
             })?;
 
         //avg
-        let mut vars = variables.lock().unwrap();
+        let mut vars = global_variables.lock().unwrap();
         let len = scenarios.len() as f64;
         vars.iter_mut().for_each(|v| match v {
             Value::Number(v) => *v /= len,
@@ -1009,7 +1044,7 @@ mod general_tests {
 }
 
 #[cfg(test)]
-mod script_evaluation_tests {
+mod expr_evaluator_tests {
     use crate::{
         nodes::{
             evaluator::Value,
@@ -1256,6 +1291,65 @@ mod script_evaluation_tests {
         assert_eq!(
             *evaluator.variables().get(0).unwrap(),
             Value::String("String".to_string())
+        );
+    }
+}
+
+#[cfg(test)]
+mod event_stream_evaluator_tests {
+    use super::*;
+
+    #[test]
+    fn test_event_stream_evaluator() {
+        let event = "
+            x = 1;
+            y = 2;
+            z = x + y;
+        "
+        .to_string();
+        let event_date = Date::new(2021, 1, 1);
+        let expr = event.try_into().unwrap();
+        let event = Event::new(event_date, expr);
+        let events = EventStream::new().with_events(vec![event]);
+        // Index expressions and initialize evaluator (adjust according to your actual logic)
+        let indexer = EventIndexer::new();
+        indexer.visit_events(&events).unwrap();
+
+        let scenarios = vec![Scenario::new()];
+        let evaluator =
+            EventStreamEvaluator::new(indexer.get_variables_size()).with_scenarios(&scenarios);
+        let results = evaluator.visit_events(&events);
+
+        assert_eq!(
+            results.unwrap(),
+            vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]
+        );
+    }
+
+    #[test]
+    fn test_event_stream_evaluator_multiple_scenarios() {
+        let event = "
+            x = 1;
+            y = 2;
+            z = x + y;
+        "
+        .to_string();
+        let event_date = Date::new(2021, 1, 1);
+        let expr = event.try_into().unwrap();
+        let event = Event::new(event_date, expr);
+        let events = EventStream::new().with_events(vec![event]);
+        // Index expressions and initialize evaluator (adjust according to your actual logic)
+        let indexer = EventIndexer::new();
+        indexer.visit_events(&events).unwrap();
+
+        let scenarios = vec![Scenario::new(); 10];
+        let evaluator =
+            EventStreamEvaluator::new(indexer.get_variables_size()).with_scenarios(&scenarios);
+        let results = evaluator.visit_events(&events);
+
+        assert_eq!(
+            results.unwrap(),
+            vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]
         );
     }
 }
@@ -1547,7 +1641,7 @@ mod ai_gen_tests {
         // Test the EventStreamEvaluator to ensure it returns an error when no scenarios are set.
         let evaluator = EventStreamEvaluator::new(1);
         let event_stream = EventStream::new();
-        let result = evaluator.evaluate(event_stream);
+        let result = evaluator.visit_events(&event_stream);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -1613,7 +1707,7 @@ mod ai_gen_tests {
         let scenarios = vec![scenario];
         let evaluator = EventStreamEvaluator::new(1).with_scenarios(&scenarios);
         let event_stream = EventStream::new();
-        let result = evaluator.evaluate(event_stream);
+        let result = evaluator.visit_events(&event_stream);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), vec![Value::Null]);
     }

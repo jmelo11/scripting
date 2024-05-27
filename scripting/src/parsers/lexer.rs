@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::utils::errors::{Result, ScriptingError};
 use std::cell::RefCell;
 
 #[derive(Debug, Clone, PartialEq)]
