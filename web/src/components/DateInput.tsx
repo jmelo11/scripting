@@ -1,7 +1,7 @@
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
-import { Box, FormControl, FormControlLabel, FormGroup, Stack, Switch, TextField, FormHelperText } from '@mui/material';
+import { FormControl, FormControlLabel, FormGroup, Stack, Switch, TextField, } from '@mui/material';
 import React, { useState } from 'react';
 import { Dayjs } from 'dayjs';
 
@@ -40,6 +40,7 @@ export default function DateInput(props: DateInputProps) {
                         <DatePicker
                             label="Date"
                             onChange={handleDateChange}
+                            format='YYYY/MM/DD'
                         />
                     </LocalizationProvider>
                 )}

@@ -1,7 +1,6 @@
 
 
-import { Box, BoxProps, useTheme } from '@mui/material';
-
+import { Box, useTheme } from '@mui/material';
 import AceEditor from "react-ace";
 
 import "ace-builds/src-noconflict/mode-java";

@@ -1,17 +1,26 @@
-import React from 'react';
-import './App.css';
+// App.tsx
+import './css/App.css';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
-import EditScript from './pages/EditScript';
+import ScriptSettingsPage from './pages/ScriptSettingsPage';
+import Home from './pages/Home';
+import EventsPage from './pages/EventsPage';
+import { ScriptsProvider } from './contexts/ScriptsContext';
+import { DrawerProvider } from './contexts/DrawerContext';
 
 function App() {
   return (
     <div className="App">
-    
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<EditScript />} />
-          </Routes>
-        </BrowserRouter>
+      <ScriptsProvider>
+        <DrawerProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/script-settings" element={<ScriptSettingsPage />} />
+              <Route path="/events" element={<EventsPage />} />  // Add the route for the events page
+            </Routes>
+          </BrowserRouter>
+        </DrawerProvider>
+      </ScriptsProvider>
     </div>
   );
 }
