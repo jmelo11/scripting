@@ -13,7 +13,7 @@ interface ScriptMacros {
     value: string;
 }
 
-interface Script {
+export interface Script {
     id: string;
     referenceDate: Date;
     macros: ScriptMacros[];
@@ -22,9 +22,11 @@ interface Script {
 
 interface ScriptsContextType {
     scripts: Script[];
+    currentScript: Script | undefined;
+    setCurrentScript: (script: Script | undefined) => void;
     addScript: (script: Script) => void;
     updateScript: (updatedScript: Script) => void;
-    updateEvents: (scriptId: string, events: ScriptEvent[]) => void;
+    updateEvents: (events: ScriptEvent[]) => void;
 }
 
 const ScriptsContext = createContext<ScriptsContextType | undefined>(undefined);
@@ -39,6 +41,7 @@ export const useScripts = (): ScriptsContextType => {
 
 export const ScriptsProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const [scripts, setScripts] = useState<Script[]>([]);
+    const [currentScript, setCurrentScript] = useState<Script | undefined>(undefined);
 
     const addScript = (script: Script) => {
         setScripts([...scripts, script]);
@@ -48,12 +51,14 @@ export const ScriptsProvider: React.FC<{ children: ReactNode }> = ({ children })
         setScripts(scripts.map(script => script.id === updatedScript.id ? updatedScript : script));
     };
 
-    const updateEvents = (scriptId: string, events: ScriptEvent[]) => {
-        setScripts(scripts.map(script => script.id === scriptId ? { ...script, events } : script));
+    const updateEvents = (events: ScriptEvent[]) => {
+        setScripts(scripts.map(script => script.id === currentScript?.id ? { ...script, events } : script));
+        setCurrentScript({ ...currentScript!, events });
     };
 
+
     return (
-        <ScriptsContext.Provider value={{ scripts, addScript, updateScript, updateEvents }}>
+        <ScriptsContext.Provider value={{ scripts, currentScript, addScript, updateScript, updateEvents, setCurrentScript }}>
             {children}
         </ScriptsContext.Provider>
     );

@@ -11,7 +11,6 @@ export interface ScriptingEventProps {
     onDateChange: (value: Dayjs | null) => void;
     scriptError: string | null;
     dateError: string | null;
-    onRemove: () => void; // Add this line to include onRemove in the props
 }
 
 export function ScriptingEvent(props: ScriptingEventProps) {
@@ -45,9 +44,9 @@ export function ScriptingEvent(props: ScriptingEventProps) {
                 color: 'black',
                 padding: 1,
             }}>
-                <Grid container spacing={2}>
+                <Grid container spacing={1}>
                     <Grid item xs={3}>
-                        <DateInput onSwitchChange={handleSwitchChange} onDateChange={handleDateChange} />
+                        <DateInput onDateChange={handleDateChange} />
                     </Grid>
                     <Grid item xs={9}>
                         <ScriptingArea onScriptChange={handleScriptChange} />

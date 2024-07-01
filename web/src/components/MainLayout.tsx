@@ -4,18 +4,24 @@ import Navbar from './Navbar';
 import Drawer from './Drawer';
 import { Box } from '@mui/material';
 import { useDrawer } from '../contexts/DrawerContext';
+import { useScripts } from '../contexts/ScriptsContext';
+import { useLocation } from 'react-router-dom';
 
 interface MainLayoutProps {
     children: React.ReactNode;
-    currentScriptId?: string;  // Add this prop
 }
 
 export default function MainLayout(props: MainLayoutProps) {
+
     const { drawerOpen, toggleDrawer } = useDrawer();
+    const { currentScript } = useScripts();
+
+    const location = useLocation();
+    const isHomePage = location.pathname === '/';
 
     return (
         <Box sx={{ display: 'flex', height: '100vh' }}>
-            <Drawer open={drawerOpen} toggleDrawer={toggleDrawer} currentScriptId={props.currentScriptId} />  {/* Pass currentScriptId */}
+            <Drawer open={drawerOpen} toggleDrawer={toggleDrawer} />
             <Box
                 sx={{
                     display: 'flex',
@@ -37,7 +43,7 @@ export default function MainLayout(props: MainLayoutProps) {
                         flexGrow: 1, // Ensure it grows to fill the parent
                     }}
                 >
-                    {props.children}
+                    {currentScript || isHomePage ? props.children : <Box>404 Not Found</Box>}
                 </Box>
             </Box>
         </Box>

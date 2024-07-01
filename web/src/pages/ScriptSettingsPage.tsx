@@ -23,10 +23,9 @@ interface ScriptRow {
 
 const ScriptSettingsPage: React.FC = () => {
     const location = useLocation();
-    const navigate = useNavigate();
     const { updateScript } = useScripts();
     const { toggleDrawer } = useDrawer();
-    const { script = { id: '', referenceDate: new Date(), rows: [] }, drawerOpen = true } = location.state || {};
+    const { script = { id: '', referenceDate: new Date(), rows: [] } } = location.state || {};
 
     const [referenceDate, setReferenceDate] = useState<Dayjs | null>(dayjs(script.referenceDate));
     const [rows, setRows] = useState<ScriptRow[]>(script.rows || []);
@@ -38,8 +37,7 @@ const ScriptSettingsPage: React.FC = () => {
         setRows(script.rows || []);
         setAlert(null);  // Reset alert when component mounts or script changes
         setUnsavedChanges(false); // Reset unsaved changes when component mounts or script changes
-        toggleDrawer(drawerOpen);
-    }, [script, toggleDrawer, drawerOpen]);
+    }, [script, toggleDrawer]);
 
     const handleAddRow = () => {
         setRows([...rows, { id: uuidv4(), key: '', value: '' }]);
@@ -78,11 +76,10 @@ const ScriptSettingsPage: React.FC = () => {
 
     const columns: GridColDef[] = [
         { field: 'key', headerName: 'Key', width: 150, editable: true, flex: 0.4 },
-        { field: 'value', headerName: 'Value', width: 150, editable: true, flex: 0.4 },        {
+        { field: 'value', headerName: 'Value', width: 150, editable: true, flex: 0.4 }, {
             field: 'actions',
             headerName: 'Actions',
             align: 'center',
-            flex: 0.2,
             renderCell: (params) => (
                 <IconButton size='small' onClick={() => handleDeleteRow(params.id)}>
                     <DeleteOutlineOutlinedIcon />
@@ -95,7 +92,7 @@ const ScriptSettingsPage: React.FC = () => {
 
     return (
         <ThemeProvider theme={menuTheme}>
-            <MainLayout currentScriptId={script.id}>
+            <MainLayout>
                 <Paper>
                     <Box sx={{ p: 2 }}>
                         <Typography variant="h5" component="p" align="left">
@@ -148,10 +145,8 @@ const ScriptSettingsPage: React.FC = () => {
                                     rows={rows}
                                     columns={columns}
                                     rowHeight={30}
-
                                     pageSizeOptions={[5, 10, 20]}
                                     autoHeight
-
                                     processRowUpdate={processRowUpdate}
                                     onProcessRowUpdateError={handleProcessRowUpdateError}
                                     sx={{ width: '100%' }}

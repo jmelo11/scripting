@@ -24,7 +24,7 @@ export const themeOptions: ThemeOptions = {
         },
     },
     typography: {
-        fontFamily: 'Ubuntu Sans Mono',
+        fontFamily: 'Roboto',
     },
 };
 
